@@ -100,6 +100,11 @@ jobs:
       with:
         name: ccache-artifact-${{ runner.name }}
         path: ~/.ccache
+    - name: download ccache dir via artifacts
+      if: failure()
+        # Exit code stops the workflow with a neutral status
+        # https://developer.github.com/actions/creating-github-actions/accessing-the-runtime-environment/#exit-codes-and-statuses
+      run: exit 78
     - name: Cache ccache dir
       uses: actions/cache@v1
       with:
