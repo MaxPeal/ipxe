@@ -125,13 +125,17 @@ jobs:
       run: exit 78
     - name: ccache -s -p ${{ runner.home }}
       run: ccache -s -p
+    - name: ccache-ls-1
+      run: ls -1R $HOME/.ccache > $PWD/ccache-ls-1
+    - name: cat ccache-ls-1
+      run: cat $PWD/ccache-ls-1
     - name: Cache ccache dir
       uses: actions/cache@v1
       with:
         path: $HOME/.ccacheFOO # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        key: ${{ runner.os }}-ccache-${{ hashFiles('/home/runner/.ccache/**') }}
+        key: ${{ runner.os }}-ccache-${{ hashFiles('ccache-ls-1') }}
         #key: ${{ runner.os }}-ccache-${{ runner.name }}
         restore-keys: |
           ${{ runner.os }}-ccache-${{ env.cache-name }}-
