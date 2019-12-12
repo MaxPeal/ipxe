@@ -66,13 +66,20 @@ jobs:
     - name: Install ccache
       shell: bash
       run: |
+        set -vx
         sudo apt install -y ccache
         # Update symlinks
         sudo /usr/sbin/update-ccache-symlinks
+        echo $PATH
         # Prepend ccache into the PATH
-        echo 'export PATH="/usr/lib/ccache:$PATH"' | tee -a ~/.bashrc
+        echo 'export PATH="/usr/lib/ccache:$PATH"' | tee -a $HOME/.bashrc
+        echo "export FOO=BLA" >> $HOME/.bashrc
+        echo "export FOOtwin=BLA" >> $HOME/.bashrc
+        echo "export FOOprofile=BLAprofile" >> $HOME/.profile
+        echo "export FOOtwin=BLAprofile" >> $HOME/.profile
+        echo "::set-env name=FOOtwin2CXX::g++-${{ matrix.version }}"
         # Source bashrc to test the new PATH
-        source ~/.bashrc && echo $PATH
+        source $HOME/.bashrc && echo $PATH && echo $FOO
 #    - name: link /usr/lib/ccache/* to /usr/local/bin/
 #      run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - uses: actions/checkout@v1
@@ -90,6 +97,8 @@ jobs:
       shell: bash
       run: |
         set -xv
+        set
+        env
         ls -altr /usr/local/bin/
         ls -altr /usr/lib/ccache
         hash gcc
