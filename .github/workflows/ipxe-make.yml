@@ -73,7 +73,7 @@ jobs:
         echo $PATH
         # Prepend ccache into the PATH
         mkdir $HOME/bin
-        mkdir $HOME/.local/bin
+        mkdir $HOME/.local $HOME/.local/bin
         ln -s /usr/lib/ccache/* $HOME/bin/
         ln -s /usr/lib/ccache/* $HOME/bin/.local/bin
         #cat $HOME/.bashrc
