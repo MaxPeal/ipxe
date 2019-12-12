@@ -11,13 +11,13 @@ jobs:
     - uses: actions/checkout@v1
    #  - name: configure
    #   run: ./configure
-    - name: make all
-      run: make all
-    - name: make everything
-      run: make everything
+    - name: make -C src all
+      run: make -C src all
+    - name: make -C src everything
+      run: make -C src everything
     - name: bin-x86_64-linux/tests.linux
-      run: make bin-x86_64-linux/tests.linux && ./bin-x86_64-linux/tests.linux
+      run: make -C src bin-x86_64-linux/tests.linux && ./bin-x86_64-linux/tests.linux
     - name: bin-i386-linux/tests.linux
-      run: make bin-i386-linux/tests.linux && ./bin-i386-linux/tests.linux
+      run: make -C src bin-i386-linux/tests.linux && ./bin-i386-linux/tests.linux
    #valgrind ./bin-x86_64-linux/tests.linux
    #  valgrind ./bin-i386-linux/tests.linux
