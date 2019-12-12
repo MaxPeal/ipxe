@@ -95,6 +95,8 @@ jobs:
     - name: link /usr/lib/ccache/* to /usr/local/bin/
       run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - uses: actions/checkout@v1
+    - name: ccache -s -p
+      run: ccache -s -p
     - name: download ccache dir via artifacts
       uses: actions/download-artifact@v1
       with:
@@ -102,11 +104,13 @@ jobs:
         path: $HOME/.ccache
       #if: failure()
       continue-on-error: true
-    - name: download ccache dir via artifacts
+    - name: download ccache dir via artifacts exit 78
       if: failure()
         # Exit code stops the workflow with a neutral status
         # https://developer.github.com/actions/creating-github-actions/accessing-the-runtime-environment/#exit-codes-and-statuses
       run: exit 78
+    - name: ccache -s -p
+      run: ccache -s -p
     - name: Cache ccache dir
       uses: actions/cache@v1
       with:
@@ -117,6 +121,8 @@ jobs:
           ${{ runner.os }}-ccache-${{ env.cache-name }}-
           ${{ runner.os }}-ccache-
           ${{ runner.os }}-
+    - name: ccache -s -p
+      run: ccache -s -p
     - name: ENV-Test2
       shell: bash
       run: |
@@ -150,8 +156,8 @@ jobs:
         ls -latr $HOME/bin $HOME/.local/bin $HOME/bin/.local/bin
         which gcc
         ccache -s -p
-    - name: download ccache dir via artifacts
+    - name: upload ccache dir via artifacts
       uses: actions/upload-artifact@v1
       with:
         name: ccache-artifact-${{ runner.name }}
-        path: $HOME/.ccache
+        path: ${{ HOME }}/.ccache
