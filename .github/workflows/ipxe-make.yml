@@ -63,8 +63,18 @@ jobs:
     - name: Install Dependencies on Linux ubuntu-16.04
       if: matrix.os == 'ubuntu-16.04'
       run: sudo apt update && sudo apt install -y binutils-dev liblzma-dev syslinux genisoimage ccache
-    - name: link /usr/lib/ccache/* to /usr/local/bin/
-      run: ln -s /usr/lib/ccache/* /usr/local/bin/
+    - name: Install ccache
+      shell: bash
+      run: |
+        sudo apt install -y ccache
+        # Update symlinks
+        sudo /usr/sbin/update-ccache-symlinks
+        # Prepend ccache into the PATH
+        echo 'export PATH="/usr/lib/ccache:$PATH"' | tee -a ~/.bashrc
+        # Source bashrc to test the new PATH
+        source ~/.bashrc && echo $PATH
+#    - name: link /usr/lib/ccache/* to /usr/local/bin/
+#      run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - uses: actions/checkout@v1
     - name: Cache ccache dir
       uses: actions/cache@v1
