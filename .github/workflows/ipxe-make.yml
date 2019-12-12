@@ -56,6 +56,16 @@ jobs:
       if: matrix.os == 'ubuntu-16.04'
       run: sudo apt update && sudo apt install -y binutils-dev liblzma-dev syslinux genisoimage ccache
     - uses: actions/checkout@v1
+    - name: Cache ccache dir
+      uses: actions/cache@v1
+      with:
+        path: ~/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
+        #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+        key: ${{ runner.os }}-ccache-${{ runner.name }}
+        restore-keys: |
+          ${{ runner.os }}-ccache-${{ env.cache-name }}-
+          ${{ runner.os }}-ccache-
+          ${{ runner.os }}-
    #  - name: configure
    #   run: ./configure
     - name: make -C src ${{ matrix.DOITPROG }}
