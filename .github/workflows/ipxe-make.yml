@@ -60,8 +60,8 @@ jobs:
       
 
 #    runs-on: ubuntu-18.04
-    steps:
-      if: matrix.skiping == '0'
+    #steps:
+    steps.if: matrix.skiping == '0'
     - run: exit ${{ matrix.skiping }}
     - name: ENV-output
       shell: bash
