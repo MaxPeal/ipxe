@@ -100,6 +100,8 @@ jobs:
       with:
         name: ccache-artifact-${{ runner.name }}
         path: ~/.ccache
+      #if: failure()
+      continue-on-error: true
     - name: download ccache dir via artifacts
       if: failure()
         # Exit code stops the workflow with a neutral status
