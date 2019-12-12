@@ -7,7 +7,7 @@ jobs:
     runs-on: ubuntu-18.04
     steps:
     - name: Install Dependencies on Linux
-      if: matrix.platform == "ubuntu-18.04"
+      if: matrix.platform == 'ubuntu-18.04'
       run: sudo apt update && sudo apt install -y --no-install-recommends binutils-dev liblzma-dev syslinux genisoimage
     - uses: actions/checkout@v1
    #  - name: configure
