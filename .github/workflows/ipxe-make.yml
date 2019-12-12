@@ -23,8 +23,8 @@ jobs:
         
         include:
           - name: ubuntu-18-all
-            env: PATH=/usr/lib/ccache
-            set-env: foo=foo
+            #not working# env: PATH=/usr/lib/ccache
+            set-env: fooTOP=foo
             os: ubuntu-18.04
             DOITPROG: "all"
             version: "1"
@@ -72,6 +72,7 @@ jobs:
         sudo /usr/sbin/update-ccache-symlinks
         echo $PATH
         # Prepend ccache into the PATH
+        cat $HOME/.bashrc
         echo 'export PATH="/usr/lib/ccache:$PATH"' | tee -a $HOME/.bashrc
         echo "export FOO=BLA" >> $HOME/.bashrc
         echo "export FOOtwin=BLA" >> $HOME/.bashrc
@@ -80,8 +81,10 @@ jobs:
         echo "::set-env name=FOOtwin2CXX::g++-${{ matrix.version }}"
         # Source bashrc to test the new PATH
         source $HOME/.bashrc && echo $PATH && echo $FOO
-#    - name: link /usr/lib/ccache/* to /usr/local/bin/
-#      run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
+        cat $HOME/.bashrc
+        cat $HOME/.profile
+    - name: link /usr/lib/ccache/* to /usr/local/bin/
+      run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - uses: actions/checkout@v1
     - name: Cache ccache dir
       uses: actions/cache@v1
@@ -105,6 +108,8 @@ jobs:
         hash
         which gcc
         ccache -s -p
+        cat $HOME/.bashrc
+        cat $HOME/.profile
     #- name: export /usr/lib/ccache to path
    #  - name: configure
    #   run: ./configure
