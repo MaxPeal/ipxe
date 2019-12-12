@@ -4,10 +4,10 @@ on: [push]
 
 jobs:
   build:
-
-    runs-on: ubuntu-latest
-    
     steps:
+    - name: Install Dependencies on Linux
+      if: matrix.platform == 'ubuntu-18.04'
+      run: sudo apt update && sudo apt install -y --no-install-recommends binutils-dev liblzma-dev syslinux genisoimage
     - uses: actions/checkout@v1
    #  - name: configure
    #   run: ./configure
