@@ -4,6 +4,7 @@ on: [push]
 
 jobs:
   build:
+    if [ "${{ matrix.skiping }}" = "0" ]
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
