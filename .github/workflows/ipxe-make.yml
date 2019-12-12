@@ -135,6 +135,6 @@ jobs:
     - name: ccache -s -p
       #shell: bash
       run: |
-      ls -latr $HOME/bin $HOME/.local/bin $HOME/bin/.local/bin
-      which gcc
-      ccache -s -p
+        ls -latr $HOME/bin $HOME/.local/bin $HOME/bin/.local/bin
+        which gcc
+        ccache -s -p
