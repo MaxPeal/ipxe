@@ -23,7 +23,7 @@ jobs:
         
         include:
           - name: ubuntu-18-all
-            key:  
+            env: PATH=/usr/lib/ccache
             os: ubuntu-18.04
             DOITPROG: "all"
             version: "1"
@@ -76,6 +76,9 @@ jobs:
     - name: ENV-Test
       shell: bash
       run: |
+        set -xv
+        ls -altr /usr/local/bin/
+        ls -altr /usr/lib/ccache
         hash gcc
         hash
         which gcc
