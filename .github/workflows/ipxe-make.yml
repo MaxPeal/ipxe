@@ -131,7 +131,7 @@ jobs:
         path: $HOME/.ccacheFOO # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        key: ${{ runner.os }}-ccache-${{ hashFiles('**/') }}
+        key: ${{ runner.os }}-ccache-${{ hashFiles('/home/runner/.ccache/**') }}
         #key: ${{ runner.os }}-ccache-${{ runner.name }}
         restore-keys: |
           ${{ runner.os }}-ccache-${{ env.cache-name }}-
