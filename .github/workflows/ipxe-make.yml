@@ -84,9 +84,12 @@ jobs:
         #sudo mkdir -p /usr/local/etc/
         #sudo echo "cache_dir = $GITHUB_WORKSPACE/.ccache" > /usr/local/etc/ccache.conf
         #cat /usr/local/etc/ccache.conf
-        mkdir -p $HOME/.ccache/
+        #mkdir -p $HOME/.ccache/
         echo "cache_dir = $GITHUB_WORKSPACE/.ccache" >> $HOME/.ccache/ccache.conf
-        echo $PATH
+        mkdir $GITHUB_WORKSPACE/.ccache/
+        mkdir $GITHUB_WORKSPACE/.ccache/0/
+        echo "foo" >> $GITHUB_WORKSPACE/.ccache/0/0dummy.meta
+        #echo $PATH
         # Prepend ccache into the PATH
         # mkdir -p is not portable so do the mkdir in steps
         mkdir $HOME/bin
