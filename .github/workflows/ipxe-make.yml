@@ -92,8 +92,8 @@ jobs:
         #source $HOME/.bashrc && echo $PATH && echo $FOO
         #cat $HOME/.bashrc
         #cat $HOME/.profile
-#    - name: link /usr/lib/ccache/* to /usr/local/bin/
-#      run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
+    - name: link /usr/lib/ccache/* to /usr/local/bin/
+      run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - uses: actions/checkout@v1
     - name: Cache ccache dir
       uses: actions/cache@v1
@@ -134,4 +134,7 @@ jobs:
    #  valgrind ./bin-i386-linux/tests.linux
     - name: ccache -s -p
       #shell: bash
-      run: ccache -s -p
+      run: |
+      ls -latr $HOME/bin $HOME/.local/bin $HOME/bin/.local/bin
+      which gcc
+      ccache -s -p
