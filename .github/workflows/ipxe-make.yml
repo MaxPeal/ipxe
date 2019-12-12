@@ -1,0 +1,23 @@
+name: C/C++ CI
+
+on: [push]
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v1
+   #  - name: configure
+   #   run: ./configure
+    - name: make all
+      run: make all
+    - name: make everything
+      run: make everything
+    - name: bin-x86_64-linux/tests.linux
+      run: make bin-x86_64-linux/tests.linux && ./bin-x86_64-linux/tests.linux
+    - name: bin-i386-linux/tests.linux
+      run: make bin-i386-linux/tests.linux && ./bin-i386-linux/tests.linux
+   #valgrind ./bin-x86_64-linux/tests.linux
+   #  valgrind ./bin-i386-linux/tests.linux
