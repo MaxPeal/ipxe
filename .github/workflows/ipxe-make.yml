@@ -24,6 +24,7 @@ jobs:
         include:
           - name: ubuntu-18-all
             env: PATH=/usr/lib/ccache
+            set-env: foo=foo
             os: ubuntu-18.04
             DOITPROG: "all"
             version: "1"
