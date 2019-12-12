@@ -124,6 +124,8 @@ jobs:
         # Exit code stops the workflow with a neutral status
         # https://developer.github.com/actions/creating-github-actions/accessing-the-runtime-environment/#exit-codes-and-statuses
       run: exit 78
+    - name: ls -laR .ccache
+      run: ls -laR $HOME/.ccache
     - name: ccache -s -p ${{ runner.home }}
       run: ccache -s -p
     - name: ccache-ls-1
@@ -139,7 +141,8 @@ jobs:
         #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
         #key: ${{ runner.os }}-ccache-${{ hashFiles('ccache-ls-1') }}
         #key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
-        key: ${{ runner.os }}-ccache-${{ hashFiles('~/.ccache/**/*.gradle') }}
+        #not working key: ${{ runner.os }}-ccache-${{ hashFiles('~/.ccache/**/*.gradle') }}
+        key: ${{ runner.os }}-ccache-${{ hashFiles('/home/runner/.ccache/**/*.meta') }}
         #key: ${{ runner.os }}-ccache-${{ runner.name }}
         restore-keys: |
           ${{ runner.os }}-ccache-${{ env.cache-name }}-
@@ -147,6 +150,8 @@ jobs:
           ${{ runner.os }}-
     - name: ccache -s -p
       run: ccache -s -p
+    - name: ls -laR .ccache
+      run: ls -laR $HOME/.ccache
     - name: ENV-Test2
       shell: bash
       run: |
