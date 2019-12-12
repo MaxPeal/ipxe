@@ -82,7 +82,7 @@ jobs:
         # Update symlinks
         sudo /usr/sbin/update-ccache-symlinks
         sudo mkdir -p /usr/local/etc/
-        echo "cache_dir = $GITHUB_WORKSPACE/.ccache" > /usr/local/etc/ccache.conf
+        sudo echo "cache_dir = $GITHUB_WORKSPACE/.ccache" > /usr/local/etc/ccache.conf
         cat /usr/local/etc/ccache.conf
         echo $PATH
         # Prepend ccache into the PATH
