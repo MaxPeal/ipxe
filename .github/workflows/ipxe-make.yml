@@ -126,7 +126,7 @@ jobs:
     - name: ccache -s -p ${{ runner.home }}
       run: ccache -s -p
     - name: ccache-ls-1
-      run: ls -1R $HOME/.ccache > $PWD/ccache-ls-1
+      run: \ls -1R $HOME/.ccache > $PWD/ccache-ls-1
     - name: cat ccache-ls-1
       run: cat $PWD/ccache-ls-1
     - name: Cache ccache dir
@@ -178,46 +178,12 @@ jobs:
         which gcc
         ccache -s -p
     - name: ls .ccache
-      run: ls -la $HOME/.ccache
-    - name: upload ccache dir via artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        name: ccache-artifact-${{ runner.name }}
-        path: $HOME/.ccache
-      continue-on-error: true
+      run: ls -laR $HOME/.ccache
 
-    - name: upload ccache dir via artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        name: ccache-artifact-${{ runner.name }}
-        path: ~/.ccache
-      continue-on-error: true
-
-    - name: upload ccache dir via artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        name: ccache-artifact-${{ runner.name }}
-        path: ./.ccache
-      continue-on-error: true
-
-    - name: upload ccache dir via artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        name: ccache-artifact-${{ runner.name }}
-        path: /.ccache
-      continue-on-error: true
-
-    - name: upload ccache dir via artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        name: ccache-artifact-${{ runner.name }}
-        path: .ccache
-      continue-on-error: true
-
-    - name: upload ccache dir via artifacts
-      uses: actions/upload-artifact@v1
-      with:
-        #name: ccache-artifact-${{ runner.name }}
-        name: ccache-artifact-foo
-        path: /home/runner/.ccache
-      continue-on-error: true
+#    - name: upload ccache dir via artifacts
+#      uses: actions/upload-artifact@v1
+#      with:
+#        #name: ccache-artifact-${{ runner.name }}
+#        name: ccache-artifact-foo
+#        path: /home/runner/.ccache
+#      continue-on-error: true
