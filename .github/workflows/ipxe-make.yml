@@ -105,7 +105,7 @@ jobs:
           ${{ runner.os }}-ccache-${{ env.cache-name }}-
           ${{ runner.os }}-ccache-
           ${{ runner.os }}-
-    - name: ENV-Test
+    - name: ENV-Test2
       shell: bash
       run: |
         set -xv
@@ -132,3 +132,6 @@ jobs:
     #  run: make -C src bin-i386-linux/tests.linux && ./bin-i386-linux/tests.linux
    #valgrind ./bin-x86_64-linux/tests.linux
    #  valgrind ./bin-i386-linux/tests.linux
+    - name: ccache -s -p
+      #shell: bash
+      run: ccache -s -p
