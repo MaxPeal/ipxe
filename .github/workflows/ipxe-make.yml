@@ -95,6 +95,11 @@ jobs:
     - name: link /usr/lib/ccache/* to /usr/local/bin/
       run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - uses: actions/checkout@v1
+    - name: download ccache dir via artifacts
+      uses: actions/download-artifact@v1
+      with:
+        name: ccache-artifact-${{ runner.name }}
+        path: ~/.ccache
     - name: Cache ccache dir
       uses: actions/cache@v1
       with:
@@ -138,3 +143,8 @@ jobs:
         ls -latr $HOME/bin $HOME/.local/bin $HOME/bin/.local/bin
         which gcc
         ccache -s -p
+    - name: download ccache dir via artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: ccache-artifact-${{ runner.name }}
+        path: ~/.ccache
