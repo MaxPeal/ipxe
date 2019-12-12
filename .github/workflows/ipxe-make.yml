@@ -160,4 +160,40 @@ jobs:
       uses: actions/upload-artifact@v1
       with:
         name: ccache-artifact-${{ runner.name }}
-        path: ${{ github.home }}/.ccache
+        path: $HOME/.ccache
+      continue-on-error: true
+
+    - name: upload ccache dir via artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: ccache-artifact-${{ runner.name }}
+        path: ~/.ccache
+      continue-on-error: true
+
+    - name: upload ccache dir via artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: ccache-artifact-${{ runner.name }}
+        path: ./.ccache
+      continue-on-error: true
+
+    - name: upload ccache dir via artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: ccache-artifact-${{ runner.name }}
+        path: /.ccache
+      continue-on-error: true
+
+    - name: upload ccache dir via artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: ccache-artifact-${{ runner.name }}
+        path: .ccache
+      continue-on-error: true
+
+    - name: upload ccache dir via artifacts
+      uses: actions/upload-artifact@v1
+      with:
+        name: ccache-artifact-${{ runner.name }}
+        path: /home/runner/.ccache
+      continue-on-error: true
