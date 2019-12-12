@@ -24,7 +24,7 @@ jobs:
         include:
           - name: ubuntu-18-all
             #not working# env: PATH=/usr/lib/ccache
-            set-env: fooTOP=foo
+            ##set-env: fooTOP=foo
             os: ubuntu-18.04
             DOITPROG: "all"
             version: "1"
@@ -72,19 +72,23 @@ jobs:
         sudo /usr/sbin/update-ccache-symlinks
         echo $PATH
         # Prepend ccache into the PATH
-        cat $HOME/.bashrc
-        echo 'export PATH="/usr/lib/ccache:$PATH"' | tee -a $HOME/.bashrc
-        echo "export FOO=BLA" >> $HOME/.bashrc
-        echo "export FOOtwin=BLA" >> $HOME/.bashrc
-        echo "export FOOprofile=BLAprofile" >> $HOME/.profile
-        echo "export FOOtwin=BLAprofile" >> $HOME/.profile
-        echo "::set-env name=FOOtwin2CXX::g++-${{ matrix.version }}"
+        mkdir $HOME/bin
+        mkdir $HOME/.local/bin
+        ln -s /usr/lib/ccache/* $HOME/bin/
+        ln -s /usr/lib/ccache/* $HOME/bin/.local/bin
+        #cat $HOME/.bashrc
+        #echo 'export PATH="/usr/lib/ccache:$PATH"' | tee -a $HOME/.bashrc
+        #echo "export FOO=BLA" >> $HOME/.bashrc
+        #echo "export FOOtwin=BLA" >> $HOME/.bashrc
+        #echo "export FOOprofile=BLAprofile" >> $HOME/.profile
+        #echo "export FOOtwin=BLAprofile" >> $HOME/.profile
+        #echo "::set-env name=FOOtwin2CXX::g++-${{ matrix.version }}"
         # Source bashrc to test the new PATH
-        source $HOME/.bashrc && echo $PATH && echo $FOO
-        cat $HOME/.bashrc
-        cat $HOME/.profile
-    - name: link /usr/lib/ccache/* to /usr/local/bin/
-      run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
+        #source $HOME/.bashrc && echo $PATH && echo $FOO
+        #cat $HOME/.bashrc
+        #cat $HOME/.profile
+#    - name: link /usr/lib/ccache/* to /usr/local/bin/
+#      run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - uses: actions/checkout@v1
     - name: Cache ccache dir
       uses: actions/cache@v1
