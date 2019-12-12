@@ -4,7 +4,6 @@ on: [push]
 
 jobs:
   build:
-    if matrix.skiping
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
@@ -62,6 +61,7 @@ jobs:
 
 #    runs-on: ubuntu-18.04
     steps:
+      if: matrix.skiping == '0'
     - run: exit ${{ matrix.skiping }}
     - name: ENV-output
       shell: bash
