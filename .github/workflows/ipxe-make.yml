@@ -7,8 +7,8 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
-      #fail-fast: false
-      fail-fast: true
+      fail-fast: false
+      ###fail-fast: true
         # Github Actions requires a single row to be added to the build matrix.
         # See https://help.github.com/en/articles/workflow-syntax-for-github-actions.
         # see https://github.com/DaanDeMeyer/reproc/blob/master/.github/workflows/main.yml.
@@ -60,8 +60,7 @@ jobs:
       
 
 #    runs-on: ubuntu-18.04
-    #steps:
-    steps.if: ${{ matrix.skiping }}
+    steps:
     - run: exit ${{ matrix.skiping }}
     - name: ENV-output
       shell: bash
