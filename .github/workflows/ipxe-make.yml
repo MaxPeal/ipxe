@@ -99,7 +99,7 @@ jobs:
       uses: actions/download-artifact@v1
       with:
         name: ccache-artifact-${{ runner.name }}
-        path: ~/.ccache
+        path: $HOME/.ccache
       #if: failure()
       continue-on-error: true
     - name: download ccache dir via artifacts
@@ -110,7 +110,7 @@ jobs:
     - name: Cache ccache dir
       uses: actions/cache@v1
       with:
-        path: ~/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
+        path: $HOME/.ccacheFOO # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         key: ${{ runner.os }}-ccache-${{ runner.name }}
         restore-keys: |
@@ -154,4 +154,4 @@ jobs:
       uses: actions/upload-artifact@v1
       with:
         name: ccache-artifact-${{ runner.name }}
-        path: ~/.ccache
+        path: $HOME/.ccache
