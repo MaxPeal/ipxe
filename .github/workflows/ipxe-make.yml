@@ -139,10 +139,11 @@ jobs:
         #path: $HOME/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        #key: ${{ runner.os }}-ccache-${{ hashFiles('ccache-ls-1') }}
+        key: ${{ runner.os }}-ccache-${{ hashFiles('ccache-ls-1') }}
         #key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
         #not working key: ${{ runner.os }}-ccache-${{ hashFiles('~/.ccache/**/*.gradle') }}
-        key: ${{ runner.os }}-ccache-${{ hashFiles('/home/runner/.ccache/**/*.meta') }}
+        #not working key: ${{ runner.os }}-ccache-${{ hashFiles('/home/runner/.ccache/**/*.meta') }}
+        # ##[error]The template is not valid. hashFiles('/home/runner/.ccache/**/*.meta') failed. Search pattern '/home/runner/.ccache/**/*.meta' doesn't match any file under '/home/runner/work/ipxe/ipxe'
         #key: ${{ runner.os }}-ccache-${{ runner.name }}
         restore-keys: |
           ${{ runner.os }}-ccache-${{ env.cache-name }}-
