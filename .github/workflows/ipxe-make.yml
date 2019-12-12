@@ -130,7 +130,9 @@ jobs:
       with:
         path: $HOME/.ccacheFOO # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-        key: ${{ runner.os }}-ccache-${{ runner.name }}
+        #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        key: ${{ runner.os }}-ccache-${{ hashFiles('**/') }}
+        #key: ${{ runner.os }}-ccache-${{ runner.name }}
         restore-keys: |
           ${{ runner.os }}-ccache-${{ env.cache-name }}-
           ${{ runner.os }}-ccache-
@@ -170,6 +172,8 @@ jobs:
         ls -latr $HOME/bin $HOME/.local/bin $HOME/bin/.local/bin
         which gcc
         ccache -s -p
+    - name: ls .ccache
+      run: ls -la $HOME/.ccache
     - name: upload ccache dir via artifacts
       uses: actions/upload-artifact@v1
       with:
