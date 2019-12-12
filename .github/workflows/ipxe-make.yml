@@ -72,8 +72,10 @@ jobs:
         sudo /usr/sbin/update-ccache-symlinks
         echo $PATH
         # Prepend ccache into the PATH
+        # mkdir -p is not portable so do the mkdir in steps
         mkdir $HOME/bin
         mkdir $HOME/bin/.local
+        mkdir $HOME/bin/.local/bin
         mkdir $HOME/.local
         mkdir $HOME/.local/bin
         ln -s /usr/lib/ccache/* $HOME/bin/
