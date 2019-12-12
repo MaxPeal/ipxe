@@ -61,7 +61,7 @@ jobs:
 
 #    runs-on: ubuntu-18.04
     #steps:
-    steps.if: matrix.skiping == '0'
+    steps.if: ${{ matrix.skiping }}
     - run: exit ${{ matrix.skiping }}
     - name: ENV-output
       shell: bash
