@@ -7,7 +7,8 @@ jobs:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
+      #fail-fast: false
+      fail-fast: true
         # Github Actions requires a single row to be added to the build matrix.
         # See https://help.github.com/en/articles/workflow-syntax-for-github-actions.
         # see https://github.com/DaanDeMeyer/reproc/blob/master/.github/workflows/main.yml.
@@ -15,6 +16,7 @@ jobs:
         # see https://github.com/svenstaro/proxyboi/blob/master/.github/workflows/publish.yml.
       matrix:
         name: [
+          ubuntu-18-blib-a,
           ubuntu-18-all,
           ubuntu-18-everything,
           ubuntu-16-all,
@@ -22,6 +24,14 @@ jobs:
         ]
         
         include:
+          - name: ubuntu-18-blib-a
+            #not working# env: PATH=/usr/lib/ccache
+            ##set-env: fooTOP=foo
+            os: ubuntu-18.04
+            DOITPROG: "bin/blib.a"
+            version: "1"
+            skiping: "0"
+          
           - name: ubuntu-18-all
             #not working# env: PATH=/usr/lib/ccache
             ##set-env: fooTOP=foo
@@ -101,7 +111,8 @@ jobs:
     - name: download ccache dir via artifacts
       uses: actions/download-artifact@v1
       with:
-        name: ccache-artifact-${{ runner.name }}
+        #name: ccache-artifact-${{ runner.name }}
+        name: ccache-artifact-foo
         #path: $HOME/.ccache
         # FIXME $HOME not working in action direct
         path: /home/runner/.ccache
@@ -197,6 +208,7 @@ jobs:
     - name: upload ccache dir via artifacts
       uses: actions/upload-artifact@v1
       with:
-        name: ccache-artifact-${{ runner.name }}
+        #name: ccache-artifact-${{ runner.name }}
+        name: ccache-artifact-foo
         path: /home/runner/.ccache
       continue-on-error: true
