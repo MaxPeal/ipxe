@@ -34,23 +34,24 @@ jobs:
             os: ubuntu-18.04
             DOITPROG: "everything"
             version: "2"
-            skiping: "0"
+            skiping: "78"
 
           - name: ubuntu-16-all
             os: ubuntu-16.04
             DOITPROG: "all"
             version: "3"
-            skiping: "0"            
+            skiping: "78"            
           
           - name: ubuntu-16-everything
             os: ubuntu-16.04
             DOITPROG: "everything"
             version: "4"
-            skiping: "0"
+            skiping: "78"
       
 
 #    runs-on: ubuntu-18.04
     steps:
+    - run: exit ${{ matrix.skiping }}
     - name: ENV-output
       shell: bash
       run: env
