@@ -23,6 +23,7 @@ jobs:
         
         include:
           - name: ubuntu-18-all
+            key:  
             os: ubuntu-18.04
             DOITPROG: "all"
             version: "1"
@@ -49,6 +50,12 @@ jobs:
 
 #    runs-on: ubuntu-18.04
     steps:
+    - name: ENV-output
+      shell: bash
+      run: env
+    - name: ENV-output
+      shell: bash
+      run: set
     - name: Install Dependencies on Linux ubuntu-18.04
       if: matrix.os == 'ubuntu-18.04'
       run: sudo apt update && sudo apt install -y --no-install-recommends binutils-dev liblzma-dev syslinux genisoimage ccache
@@ -66,6 +73,14 @@ jobs:
           ${{ runner.os }}-ccache-${{ env.cache-name }}-
           ${{ runner.os }}-ccache-
           ${{ runner.os }}-
+    - name: ENV-Test
+      shell: bash
+      run: |
+        hash gcc
+        hash
+        which gcc
+        ccache -s -p
+    #- name: export /usr/lib/ccache to path
    #  - name: configure
    #   run: ./configure
     - name: make -C src ${{ matrix.DOITPROG }}
