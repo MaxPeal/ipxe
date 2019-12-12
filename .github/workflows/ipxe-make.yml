@@ -103,6 +103,7 @@ jobs:
         #source $HOME/.bashrc && echo $PATH && echo $FOO
         #cat $HOME/.bashrc
         #cat $HOME/.profile
+
     - name: link /usr/lib/ccache/* to /usr/local/bin/
       run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - uses: actions/checkout@v1
@@ -136,7 +137,9 @@ jobs:
         #path: $HOME/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        key: ${{ runner.os }}-ccache-${{ hashFiles('ccache-ls-1') }}
+        #key: ${{ runner.os }}-ccache-${{ hashFiles('ccache-ls-1') }}
+        #key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
+        key: ${{ runner.os }}-ccache-${{ hashFiles('~/.ccache/**/*.gradle') }}
         #key: ${{ runner.os }}-ccache-${{ runner.name }}
         restore-keys: |
           ${{ runner.os }}-ccache-${{ env.cache-name }}-
@@ -177,7 +180,7 @@ jobs:
         ls -latr $HOME/bin $HOME/.local/bin $HOME/bin/.local/bin
         which gcc
         ccache -s -p
-    - name: ls .ccache
+    - name: ls -laR .ccache
       run: ls -laR $HOME/.ccache
     - name: ccache-ls-1-update
       run: \ls -1R $HOME/.ccache > $PWD/ccache-ls-1
