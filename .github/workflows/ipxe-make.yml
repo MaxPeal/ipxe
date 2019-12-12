@@ -179,7 +179,8 @@ jobs:
         ccache -s -p
     - name: ls .ccache
       run: ls -laR $HOME/.ccache
-
+    - name: ccache-ls-1-update
+      run: \ls -1R $HOME/.ccache > $PWD/ccache-ls-1
 #    - name: upload ccache dir via artifacts
 #      uses: actions/upload-artifact@v1
 #      with:
