@@ -169,7 +169,8 @@ jobs:
         #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
         #not working # key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('**/*.meta') }}
         #key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('.ccache/**/*.meta') }}
-        key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('ccache_dir/**/*.meta') }}
+        #work but only with betining dummy.meta# #key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('ccache_dir/**/*.meta') }}
+        key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('ccache_dir/**/*') }}
         #key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
         #not working key: ${{ runner.os }}-ccache-${{ hashFiles('~/.ccache/**/*.gradle') }}
         #not working key: ${{ runner.os }}-ccache-${{ hashFiles('/home/runner/.ccache/**/*.meta') }}
