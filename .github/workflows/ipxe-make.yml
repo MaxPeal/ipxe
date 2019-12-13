@@ -132,8 +132,10 @@ jobs:
         # Exit code stops the workflow with a neutral status
         # https://developer.github.com/actions/creating-github-actions/accessing-the-runtime-environment/#exit-codes-and-statuses
       run: exit 78
-    - name: ls -laR .ccache
+    - name: ls -laR $HOME/.ccache
       run: ls -laR $HOME/.ccache
+    - name: ls -laR $GITHUB_WORKSPACE/.ccache
+      run: ls -laR $GITHUB_WORKSPACE/.ccache
     - name: ccache -s -p ${{ runner.home }}
       run: ccache -s -p
     - name: ccache-ls-1
