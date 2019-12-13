@@ -141,8 +141,10 @@ jobs:
       run: ls -laR $HOME/.ccache
     #- name: ls -laR $GITHUB_WORKSPACE/.ccache
     #  run: ls -laR $GITHUB_WORKSPACE/.ccache
-    - name: ls -laR $GITHUB_WORKSPACE/ccache_dir
-      run: ls -laR $GITHUB_WORKSPACE/ccache_dir
+    #- name: ls -laR $GITHUB_WORKSPACE/ccache_dir
+    #  run: ls -laR $GITHUB_WORKSPACE/ccache_dir
+    - name: ls -laR $GITHUB_WORKSPACE
+      run: ls -laR $GITHUB_WORKSPACE
     - name: ccache -s -p ${{ runner.home }}
       run: ccache -s -p
     - name: ccache-ls-1
