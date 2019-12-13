@@ -116,7 +116,14 @@ jobs:
         #source $HOME/.bashrc && echo $PATH && echo $FOO
         #cat $HOME/.bashrc
         #cat $HOME/.profile
-
+        echo ######################
+        ccache -s -p
+        echo ######################
+        ccache -c
+        echo ######################
+        ccache -s -p
+        echo ######################
+        
     - name: link /usr/lib/ccache/* to /usr/local/bin/
       run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - name: ccache -s -p
