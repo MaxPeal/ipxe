@@ -147,7 +147,8 @@ jobs:
         #path: $HOME/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-        key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('**/*.meta') }}
+        #not working # key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('**/*.meta') }}
+        key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('.ccache/**/*.meta') }}
         #key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
         #not working key: ${{ runner.os }}-ccache-${{ hashFiles('~/.ccache/**/*.gradle') }}
         #not working key: ${{ runner.os }}-ccache-${{ hashFiles('/home/runner/.ccache/**/*.meta') }}
