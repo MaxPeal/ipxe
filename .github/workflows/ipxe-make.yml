@@ -177,11 +177,11 @@ jobs:
         #not working key: ${{ runner.os }}-ccache-${{ hashFiles('/home/runner/.ccache/**/*.meta') }}
         # ##[error]The template is not valid. hashFiles('/home/runner/.ccache/**/*.meta') failed. Search pattern '/home/runner/.ccache/**/*.meta' doesn't match any file under '/home/runner/work/ipxe/ipxe'
         #key: ${{ runner.os }}-ccache-${{ runner.name }}
-        restore-keys: |
-          ${{ runner.os }}-ccache-workspace-${{ env.cache-name }}
-          ${{ runner.os }}-ccache-workspace-${{ runner.namename }}
-          ${{ runner.os }}-ccache-
-          ${{ runner.os }}-
+##        restore-keys: |
+##          ${{ runner.os }}-ccache-workspace-${{ env.cache-name }}
+##          ${{ runner.os }}-ccache-workspace-${{ runner.namename }}
+##          ${{ runner.os }}-ccache-
+##          ${{ runner.os }}-
     - name: ccache -s -p
       run: ccache -s -p
     - name: ls -laR .ccache
