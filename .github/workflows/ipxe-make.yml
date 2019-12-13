@@ -84,7 +84,7 @@ jobs:
         #sudo mkdir -p /usr/local/etc/
         #sudo echo "cache_dir = $GITHUB_WORKSPACE/.ccache" > /usr/local/etc/ccache.conf
         #cat /usr/local/etc/ccache.conf
-        #mkdir -p $HOME/.ccache/
+        mkdir -p $HOME/.ccache/
         echo "cache_dir = $GITHUB_WORKSPACE/.ccache" >> $HOME/.ccache/ccache.conf
         mkdir $GITHUB_WORKSPACE/.ccache/
         mkdir $GITHUB_WORKSPACE/.ccache/0/
