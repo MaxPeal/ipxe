@@ -62,6 +62,7 @@ jobs:
 #    runs-on: ubuntu-18.04
     steps:
     - run: exit ${{ matrix.skiping }}
+    - uses: actions/checkout@v1
     - name: ENV-output
       shell: bash
       run: env
@@ -114,7 +115,6 @@ jobs:
 
     - name: link /usr/lib/ccache/* to /usr/local/bin/
       run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
-    - uses: actions/checkout@v1
     - name: ccache -s -p
       run: ccache -s -p
     - name: download ccache dir via artifacts
