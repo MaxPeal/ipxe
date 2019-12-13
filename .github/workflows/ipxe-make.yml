@@ -161,7 +161,8 @@ jobs:
     - name: Cache ccache dir
       uses: actions/cache@v1
       with:
-        path: $GITHUB_WORKSPACE/ccache_dir # ccache cache files are stored in `~/.ccache` on Linux/macOS
+        path: ccache_dir # ccache cache files
+        #not working internel# path: $GITHUB_WORKSPACE/ccache_dir # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #path: $GITHUB_WORKSPACE/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #path: ~/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #path: $HOME/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
@@ -177,7 +178,8 @@ jobs:
         # ##[error]The template is not valid. hashFiles('/home/runner/.ccache/**/*.meta') failed. Search pattern '/home/runner/.ccache/**/*.meta' doesn't match any file under '/home/runner/work/ipxe/ipxe'
         #key: ${{ runner.os }}-ccache-${{ runner.name }}
         restore-keys: |
-          ${{ runner.os }}-ccache-workspace-${{ env.cache-name }}-
+          ${{ runner.os }}-ccache-workspace-${{ env.cache-name }}
+          ${{ runner.os }}-ccache-workspace-${{ runner.namename }}
           ${{ runner.os }}-ccache-
           ${{ runner.os }}-
     - name: ccache -s -p
@@ -214,12 +216,12 @@ jobs:
     - name: ccache -s -p
       #shell: bash
       run: |
-        ls -latr $HOME/bin $HOME/.local/bin $HOME/bin/.local/bin
-        which gcc
+        #ls -latr $HOME/bin $HOME/.local/bin $HOME/bin/.local/bin
+        #which gcc
         ccache -s -p
     - name: ls -laR .ccache
-      run: ls -laR $HOME/.ccache
-    - name: ccache-ls-1-update
+#      run: ls -laR $HOME/.ccache
+#    - name: ccache-ls-1-update
       run: \ls -1R $HOME/.ccache > $PWD/ccache-ls-1
 #    - name: upload ccache dir via artifacts
 #      uses: actions/upload-artifact@v1
