@@ -44,19 +44,22 @@ jobs:
             os: ubuntu-18.04
             DOITPROG: "everything"
             version: "2"
-            skiping: "78"
+            #skiping: "78"
+            skiping: "0"
 
           - name: ubuntu-16-all
             os: ubuntu-16.04
             DOITPROG: "all"
             version: "3"
-            skiping: "78"            
+            #skiping: "78"            
+            skiping: "0"
           
           - name: ubuntu-16-everything
             os: ubuntu-16.04
             DOITPROG: "everything"
             version: "4"
-            skiping: "78"
+            #skiping: "78"
+            skiping: "0"
       
 
 #    runs-on: ubuntu-18.04
@@ -86,10 +89,11 @@ jobs:
         #sudo echo "cache_dir = $GITHUB_WORKSPACE/.ccache" > /usr/local/etc/ccache.conf
         #cat /usr/local/etc/ccache.conf
         mkdir -p $HOME/.ccache/
-        echo "cache_dir = $GITHUB_WORKSPACE/.ccache" >> $HOME/.ccache/ccache.conf
-        mkdir $GITHUB_WORKSPACE/.ccache/
-        mkdir $GITHUB_WORKSPACE/.ccache/0/
-        echo "foo" >> $GITHUB_WORKSPACE/.ccache/0/0dummy.meta
+        #echo "cache_dir = $GITHUB_WORKSPACE/.ccache" >> $HOME/.ccache/ccache.conf
+        echo "cache_dir = $GITHUB_WORKSPACE/ccache_dir" >> $HOME/.ccache/ccache.conf
+        #####mkdir $GITHUB_WORKSPACE/.ccache/
+        #####mkdir $GITHUB_WORKSPACE/.ccache/0/
+        #####echo "foo" >> $GITHUB_WORKSPACE/.ccache/0/0dummy.meta
         #echo $PATH
         # Prepend ccache into the PATH
         # mkdir -p is not portable so do the mkdir in steps
@@ -117,26 +121,28 @@ jobs:
       run: sudo ln -s /usr/lib/ccache/* /usr/local/bin/
     - name: ccache -s -p
       run: ccache -s -p
-    - name: download ccache dir via artifacts
-      uses: actions/download-artifact@v1
-      with:
-        #name: ccache-artifact-${{ runner.name }}
-        name: ccache-artifact-foo
-        #path: $HOME/.ccache
-        # FIXME $HOME not working in action direct
-        ###path: /home/runner/.ccache
-        path: $GITHUB_WORKSPACE/.ccache
-      #if: failure()
-      continue-on-error: true
-    - name: download ccache dir via artifacts exit 78
-      if: failure()
-        # Exit code stops the workflow with a neutral status
-        # https://developer.github.com/actions/creating-github-actions/accessing-the-runtime-environment/#exit-codes-and-statuses
-      run: exit 78
+    #- name: download ccache dir via artifacts
+    #  uses: actions/download-artifact@v1
+    #  with:
+    #    #name: ccache-artifact-${{ runner.name }}
+    #    name: ccache-artifact-foo
+    #    #path: $HOME/.ccache
+    #    # FIXME $HOME not working in action direct
+    #    ###path: /home/runner/.ccache
+    #    path: $GITHUB_WORKSPACE/ccache_dir
+    #  #if: failure()
+    #  continue-on-error: true
+    #- name: download ccache dir via artifacts exit 78
+    #  if: failure()
+    #    # Exit code stops the workflow with a neutral status
+    #    # https://developer.github.com/actions/creating-github-actions/accessing-the-runtime-environment/#exit-codes-and-statuses
+    #  run: exit 78
     - name: ls -laR $HOME/.ccache
       run: ls -laR $HOME/.ccache
-    - name: ls -laR $GITHUB_WORKSPACE/.ccache
-      run: ls -laR $GITHUB_WORKSPACE/.ccache
+    #- name: ls -laR $GITHUB_WORKSPACE/.ccache
+    #  run: ls -laR $GITHUB_WORKSPACE/.ccache
+    - name: ls -laR $GITHUB_WORKSPACE/ccache_dir
+      run: ls -laR $GITHUB_WORKSPACE/ccache_dir
     - name: ccache -s -p ${{ runner.home }}
       run: ccache -s -p
     - name: ccache-ls-1
@@ -146,13 +152,15 @@ jobs:
     - name: Cache ccache dir
       uses: actions/cache@v1
       with:
-        path: $GITHUB_WORKSPACE/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
+        path: $GITHUB_WORKSPACE/ccache_dir # ccache cache files are stored in `~/.ccache` on Linux/macOS
+        #path: $GITHUB_WORKSPACE/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #path: ~/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #path: $HOME/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
         #not working # key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('**/*.meta') }}
-        key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('.ccache/**/*.meta') }}
+        #key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('.ccache/**/*.meta') }}
+        key: ${{ runner.os }}-ccache-workspace-${{ hashFiles('ccache_dir/**/*.meta') }}
         #key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle') }}
         #not working key: ${{ runner.os }}-ccache-${{ hashFiles('~/.ccache/**/*.gradle') }}
         #not working key: ${{ runner.os }}-ccache-${{ hashFiles('/home/runner/.ccache/**/*.meta') }}
