@@ -124,7 +124,8 @@ jobs:
         name: ccache-artifact-foo
         #path: $HOME/.ccache
         # FIXME $HOME not working in action direct
-        path: /home/runner/.ccache
+        ###path: /home/runner/.ccache
+      path: $GITHUB_WORKSPACE/.ccache
       #if: failure()
       continue-on-error: true
     - name: download ccache dir via artifacts exit 78
@@ -145,7 +146,8 @@ jobs:
     - name: Cache ccache dir
       uses: actions/cache@v1
       with:
-        path: ~/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
+        path: $GITHUB_WORKSPACE/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
+        #path: ~/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #path: $HOME/.ccache # ccache cache files are stored in `~/.ccache` on Linux/macOS
         #key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         #key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
