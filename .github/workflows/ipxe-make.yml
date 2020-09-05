@@ -65,7 +65,7 @@ jobs:
 #    runs-on: ubuntu-18.04
     steps:
     - run: exit ${{ matrix.skiping }}
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
 #    - name: setup env test
 #      #MUST run AFTER actions/checkout!
 #      run: |
