@@ -50,16 +50,17 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 int imgdownload ( struct uri *uri, unsigned long timeout,
 		  struct image **image ) {
-	const char *password;
+	struct uri uri_redacted;
 	char *uri_string_redacted;
 	int rc;
 
 	/* Construct redacted URI */
-	password = uri->password;
-	if ( password )
-		uri->password = "***";
-	uri_string_redacted = format_uri_alloc ( uri );
-	uri->password = password;
+	memcpy ( &uri_redacted, uri, sizeof ( uri_redacted ) );
+	uri_redacted.user = NULL;
+	uri_redacted.password = NULL;
+	uri_redacted.query = NULL;
+	uri_redacted.fragment = NULL;
+	uri_string_redacted = format_uri_alloc ( &uri_redacted );
 	if ( ! uri_string_redacted ) {
 		rc = -ENOMEM;
 		goto err_uri_string;
@@ -167,4 +168,25 @@ void imgstat ( struct image *image ) {
 	if ( image->cmdline )
 		printf ( " \"%s\"", image->cmdline );
 	printf ( "\n" );
+}
+
+/**
+ * Create image from block of memory
+ *
+ * @v name		Name
+ * @v data		Image data
+ * @v len		Length
+ * @ret rc		Return status code
+ */
+int imgmem ( const char *name, userptr_t data, size_t len ) {
+	struct image *image;
+
+	/* Create image */
+	image = image_memory ( name, data, len );
+	if ( ! image ) {
+		printf ( "Could not create image\n" );
+		return -ENOMEM;
+	}
+
+	return 0;
 }

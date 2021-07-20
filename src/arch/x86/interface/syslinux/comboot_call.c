@@ -220,7 +220,7 @@ static int comboot_fetch_kernel ( char *kernel_file, char *cmdline ) {
 /**
  * Terminate program interrupt handler
  */
-static __asmcall void int20 ( struct i386_all_regs *ix86 __unused ) {
+static __asmcall __used void int20 ( struct i386_all_regs *ix86 __unused ) {
 	rmlongjmp ( comboot_return, COMBOOT_EXIT );
 }
 
@@ -228,7 +228,7 @@ static __asmcall void int20 ( struct i386_all_regs *ix86 __unused ) {
 /**
  * DOS-compatible API
  */
-static __asmcall void int21 ( struct i386_all_regs *ix86 ) {
+static __asmcall __used void int21 ( struct i386_all_regs *ix86 ) {
 	ix86->flags |= CF;
 
 	switch ( ix86->regs.ah ) {
@@ -311,7 +311,7 @@ __weak int pxe_api_call_weak ( struct i386_all_regs *ix86 __unused ) {
 /**
  * SYSLINUX API
  */
-static __asmcall void int22 ( struct i386_all_regs *ix86 ) {
+static __asmcall __used void int22 ( struct i386_all_regs *ix86 ) {
 	ix86->flags |= CF;
 
 	switch ( ix86->regs.ax ) {
@@ -663,7 +663,7 @@ void hook_comboot_interrupts ( ) {
 			      VIRT_CALL ( int20 )
 			      "clc\n\t"
 			      "call patch_cf\n\t"
-		              "iret\n\t" ) );
+		              "iret\n\t" ) : );
 
 	hook_bios_interrupt ( 0x20, ( intptr_t ) int20_wrapper, &int20_vector );
 
@@ -672,7 +672,7 @@ void hook_comboot_interrupts ( ) {
 			      VIRT_CALL ( int21 )
 			      "clc\n\t"
 			      "call patch_cf\n\t"
-		              "iret\n\t" ) );
+		              "iret\n\t" ) : );
 
 	hook_bios_interrupt ( 0x21, ( intptr_t ) int21_wrapper, &int21_vector );
 
@@ -681,7 +681,7 @@ void hook_comboot_interrupts ( ) {
 			      VIRT_CALL ( int22 )
 			      "clc\n\t"
 			      "call patch_cf\n\t"
-		              "iret\n\t" ) );
+		              "iret\n\t" ) : );
 
 	hook_bios_interrupt ( 0x22, ( intptr_t ) int22_wrapper, &int22_vector );
 }

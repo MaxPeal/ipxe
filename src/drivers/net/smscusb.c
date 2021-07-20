@@ -30,6 +30,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/usbnet.h>
 #include <ipxe/ethernet.h>
 #include <ipxe/profile.h>
+#include <ipxe/fdt.h>
 #include "smscusb.h"
 
 /** @file
@@ -441,6 +442,39 @@ int smscusb_otp_fetch_mac ( struct smscusb_device *smscusb,
 
 /******************************************************************************
  *
+ * Device tree
+ *
+ ******************************************************************************
+ */
+
+/**
+ * Fetch MAC address from device tree
+ *
+ * @v smscusb		SMSC USB device
+ * @ret rc		Return status code
+ */
+int smscusb_fdt_fetch_mac ( struct smscusb_device *smscusb ) {
+	struct net_device *netdev = smscusb->netdev;
+	unsigned int offset;
+	int rc;
+
+	/* Look for "ethernet[0]" alias */
+	if ( ( rc = fdt_alias ( "ethernet", &offset ) != 0 ) &&
+	     ( rc = fdt_alias ( "ethernet0", &offset ) != 0 ) ) {
+		return rc;
+	}
+
+	/* Fetch MAC address */
+	if ( ( rc = fdt_mac ( offset, netdev ) ) != 0 )
+		return rc;
+
+	DBGC ( smscusb, "SMSCUSB %p using FDT MAC %s\n",
+	       smscusb, eth_ntoa ( netdev->hw_addr ) );
+	return 0;
+}
+
+/******************************************************************************
+ *
  * MII access
  *
  ******************************************************************************
@@ -481,13 +515,15 @@ static int smscusb_mii_wait ( struct smscusb_device *smscusb ) {
 /**
  * Read from MII register
  *
- * @v mii		MII interface
+ * @v mdio		MII interface
+ * @v phy		PHY address
  * @v reg		Register address
  * @ret value		Data read, or negative error
  */
-static int smscusb_mii_read ( struct mii_interface *mii, unsigned int reg ) {
+static int smscusb_mii_read ( struct mii_interface *mdio,
+			      unsigned int phy __unused, unsigned int reg ) {
 	struct smscusb_device *smscusb =
-		container_of ( mii, struct smscusb_device, mii );
+		container_of ( mdio, struct smscusb_device, mdio );
 	unsigned int base = smscusb->mii_base;
 	uint32_t mii_access;
 	uint32_t mii_data;
@@ -520,15 +556,17 @@ static int smscusb_mii_read ( struct mii_interface *mii, unsigned int reg ) {
 /**
  * Write to MII register
  *
- * @v mii		MII interface
+ * @v mdio		MII interface
+ * @v phy		PHY address
  * @v reg		Register address
  * @v data		Data to write
  * @ret rc		Return status code
  */
-static int smscusb_mii_write ( struct mii_interface *mii, unsigned int reg,
+static int smscusb_mii_write ( struct mii_interface *mdio,
+			       unsigned int phy __unused, unsigned int reg,
 			       unsigned int data ) {
 	struct smscusb_device *smscusb =
-		container_of ( mii, struct smscusb_device, mii );
+		container_of ( mdio, struct smscusb_device, mdio );
 	unsigned int base = smscusb->mii_base;
 	uint32_t mii_access;
 	uint32_t mii_data;

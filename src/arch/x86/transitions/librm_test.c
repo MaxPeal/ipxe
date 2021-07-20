@@ -58,7 +58,8 @@ static struct profiler virt_call_profiler __profiler = { .name = "virt_call" };
 /**
  * Dummy function for profiling tests
  */
-static __asmcall void librm_test_call ( struct i386_all_regs *ix86 __unused ) {
+static __asmcall __used void
+librm_test_call ( struct i386_all_regs *ix86 __unused ) {
 	/* Do nothing */
 }
 
@@ -97,7 +98,7 @@ static void librm_test_exec ( void ) {
 	/* Profile complete real-mode call cycle */
 	for ( i = 0 ; i < PROFILE_COUNT ; i++ ) {
 		profile_start ( &real_call_profiler );
-		__asm__ __volatile__ ( REAL_CODE ( "" ) );
+		__asm__ __volatile__ ( REAL_CODE ( "" ) : );
 		profile_stop ( &real_call_profiler );
 	}
 

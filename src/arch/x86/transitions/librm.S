@@ -99,7 +99,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
  ****************************************************************************
  */
 	.section ".data16.gdt", "aw", @progbits
-	.align 16
+	.balign 16
 gdt:
 gdtr:		/* The first GDT entry is unused, the GDTR can fit here. */
 gdt_limit:		.word gdt_length - 1
@@ -210,9 +210,7 @@ VC_TMP_CR3:		.space	4
 VC_TMP_CR4:		.space	4
 VC_TMP_EMER:		.space	8
 .endif
-#ifdef TIVOLI_VMM_WORKAROUND
 VC_TMP_FXSAVE:		.space	512
-#endif
 VC_TMP_END:
 	.previous
 
@@ -224,7 +222,7 @@ RC_TMP_END:
 
 	/* Shared temporary static buffer */
 	.section ".bss16.rm_tmpbuf", "aw", @nobits
-	.align 16
+	.balign 16
 rm_tmpbuf:
 	.space	VC_TMP_END
 	.size	rm_tmpbuf, . - rm_tmpbuf
@@ -350,6 +348,13 @@ init_librm_rmode:
 	/* Initialise IDT */
 	virtcall init_idt
 
+#ifdef TIVOLI_VMM_WORKAROUND
+	/* Check for FXSAVE/FXRSTOR */
+	clc
+	virtcall check_fxsr
+	setnc	fxsr_supported
+#endif
+
 	/* Restore registers */
 	popl	%edi
 	popl	%ebx
@@ -365,6 +370,10 @@ set_seg_base:
 	movb	%ah, 7(%bx)
 	roll	$16, %eax
 	ret
+
+	.section ".data16.fxsr_supported", "awx", @progbits
+fxsr_supported:		/* FXSAVE/FXRSTOR instructions supported */
+	.byte	0
 
 /****************************************************************************
  * real_to_prot (real-mode near call, 32-bit virtual return address)
@@ -1007,10 +1016,11 @@ virt_call:
 	cli
 	movw	%cs:rm_ds, %ds
 
-#ifdef TIVOLI_VMM_WORKAROUND
 	/* Preserve FPU, MMX and SSE state in temporary static buffer */
+	testb	$0xff, fxsr_supported
+	jz	1f
 	fxsave	( rm_tmpbuf + VC_TMP_FXSAVE )
-#endif
+1:
 	/* Preserve GDT and IDT in temporary static buffer */
 	sidt	( rm_tmpbuf + VC_TMP_IDT )
 	sgdt	( rm_tmpbuf + VC_TMP_GDT )
@@ -1077,10 +1087,11 @@ vc_rmode:
 	wrmsr
 .endif
 
-#ifdef TIVOLI_VMM_WORKAROUND
 	/* Restore FPU, MMX and SSE state from temporary static buffer */
+	testb	$0xff, fxsr_supported
+	jz	1f
 	fxrstor	( rm_tmpbuf + VC_TMP_FXSAVE )
-#endif
+1:
 	/* Restore registers and flags and return */
 	popl	%eax /* skip %cs and %ss */
 	popw	%ds
@@ -1363,20 +1374,19 @@ flatten_dummy:
 	.code32
 	.globl interrupt_wrapper
 interrupt_wrapper:
-	/* Preserve registers (excluding already-saved %eax and
-	 * otherwise unused registers which are callee-save for both
-	 * 32-bit and 64-bit ABIs).
-	 */
+	/* Preserve registers (excluding already-saved %eax) */
 	pushl	%ebx
 	pushl	%ecx
 	pushl	%edx
 	pushl	%esi
 	pushl	%edi
+	pushl	%ebp
 
 	/* Expand IRQ number to whole %eax register */
 	movzbl	%al, %eax
 
 .if64 ; /* Skip transition to long mode, if applicable */
+	xorl	%edx, %edx
 	movw	%cs, %bx
 	cmpw	$LONG_CS, %bx
 	je	1f
@@ -1391,24 +1401,45 @@ interrupt_wrapper:
 
 	/* Switch to virtual addressing */
 	call	intr_to_prot
+
+	/* Pass 32-bit interrupt frame pointer in %edx */
+	movl	%esp, %edx
+	xorl	%ecx, %ecx
 .if64
 	/* Switch to long mode */
 	call	prot_to_long
 	.code64
 
-1:	/* Preserve long-mode caller-save registers */
+1:	/* Preserve long-mode registers */
 	pushq	%r8
 	pushq	%r9
 	pushq	%r10
 	pushq	%r11
+	pushq	%r12
+	pushq	%r13
+	pushq	%r14
+	pushq	%r15
 
 	/* Expand IRQ number to whole %rdi register */
 	movl	%eax, %edi
+
+	/* Pass 32-bit interrupt frame pointer (if applicable) in %rsi */
+	testl	%edx, %edx
+	je	1f
+	movl	%edx, %esi
+	addl	virt_offset, %esi
+1:
+	/* Pass 64-bit interrupt frame pointer in %rdx */
+	movq	%rsp, %rdx
 .endif
 	/* Call interrupt handler */
 	call	interrupt
 .if64
-	/* Restore long-mode caller-save registers */
+	/* Restore long-mode registers */
+	popq	%r15
+	popq	%r14
+	popq	%r13
+	popq	%r12
 	popq	%r11
 	popq	%r10
 	popq	%r9
@@ -1432,6 +1463,7 @@ interrupt_wrapper:
 	popl	%ds
 
 1:	/* Restore registers */
+	popl	%ebp
 	popl	%edi
 	popl	%esi
 	popl	%edx
@@ -1449,7 +1481,7 @@ interrupt_wrapper:
  ****************************************************************************
  */
 	.section ".pages", "aw", @nobits
-	.align	SIZEOF_PT
+	.balign	SIZEOF_PT
 
 	/* Page map level 4 entries (PML4Es)
 	 *

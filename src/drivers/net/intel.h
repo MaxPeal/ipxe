@@ -12,6 +12,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <stdint.h>
 #include <ipxe/if_ether.h>
 #include <ipxe/nvs.h>
+#include <ipxe/dma.h>
 
 /** Intel BAR size */
 #define INTEL_BAR_SIZE ( 128 * 1024 )
@@ -195,6 +196,10 @@ struct intel_descriptor {
 #define INTEL_RAH0 0x05404UL
 #define INTEL_RAH0_AV		0x80000000UL	/**< Address valid */
 
+/** Future Extended NVM register 11 */
+#define INTEL_FEXTNVM11 0x05bbcUL
+#define INTEL_FEXTNVM11_WTF	0x00002000UL	/**< Don't ask */
+
 /** Receive address */
 union intel_receive_address {
 	struct {
@@ -208,6 +213,8 @@ union intel_receive_address {
 struct intel_ring {
 	/** Descriptors */
 	struct intel_descriptor *desc;
+	/** Descriptor ring DMA mapping */
+	struct dma_mapping map;
 	/** Producer index */
 	unsigned int prod;
 	/** Consumer index */
@@ -273,6 +280,8 @@ intel_init_mbox ( struct intel_mailbox *mbox, unsigned int ctrl,
 struct intel_nic {
 	/** Registers */
 	void *regs;
+	/** DMA device */
+	struct dma_device *dma;
 	/** Port number (for multi-port devices) */
 	unsigned int port;
 	/** Flags */
@@ -308,7 +317,12 @@ enum intel_flags {
 	INTEL_NO_PHY_RST = 0x0004,
 	/** ASDE is broken */
 	INTEL_NO_ASDE = 0x0008,
+	/** Reset may cause a complete device hang */
+	INTEL_RST_HANG = 0x0010,
 };
+
+/** The i219 has a seriously broken reset mechanism */
+#define INTEL_I219 ( INTEL_NO_PHY_RST | INTEL_RST_HANG )
 
 /**
  * Dump diagnostic information

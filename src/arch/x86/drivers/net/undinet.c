@@ -33,6 +33,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/netdevice.h>
 #include <ipxe/if_ether.h>
 #include <ipxe/ethernet.h>
+#include <ipxe/pci.h>
 #include <ipxe/profile.h>
 #include <undi.h>
 #include <undinet.h>
@@ -102,6 +103,13 @@ static union u_PXENV_ANY __bss16 ( undinet_params );
  */
 SEGOFF16_t __bss16 ( undinet_entry_point );
 #define undinet_entry_point __use_data16 ( undinet_entry_point )
+
+/* Read TSC in real mode only when profiling */
+#if PROFILING
+#define RDTSC_IF_PROFILING "rdtsc\n\t"
+#else
+#define RDTSC_IF_PROFILING ""
+#endif
 
 /** IRQ profiler */
 static struct profiler undinet_irq_profiler __profiler =
@@ -287,14 +295,14 @@ static int undinet_call ( struct undi_nic *undinic, unsigned int function,
 	 */
 	profile_start ( &profiler->total );
 	__asm__ __volatile__ ( REAL_CODE ( "pushl %%ebp\n\t" /* gcc bug */
-					   "rdtsc\n\t"
+					   RDTSC_IF_PROFILING
 					   "pushl %%eax\n\t"
 					   "pushw %%es\n\t"
 					   "pushw %%di\n\t"
 					   "pushw %%bx\n\t"
 					   "lcall *undinet_entry_point\n\t"
 					   "movw %%ax, %%bx\n\t"
-					   "rdtsc\n\t"
+					   RDTSC_IF_PROFILING
 					   "addw $6, %%sp\n\t"
 					   "popl %%edx\n\t"
 					   "popl %%ebp\n\t" /* gcc bug */ )
@@ -807,6 +815,10 @@ struct undinet_irq_broken {
 	uint16_t pci_vendor;
 	/** PCI device ID */
 	uint16_t pci_device;
+	/** PCI subsystem vendor ID */
+	uint16_t pci_subsys_vendor;
+	/** PCI subsystem ID */
+	uint16_t pci_subsys;
 };
 
 /**
@@ -822,10 +834,10 @@ struct undinet_irq_broken {
  */
 static const struct undinet_irq_broken undinet_irq_broken_list[] = {
 	/* HP XX70x laptops */
-	{ .pci_vendor = 0x8086, .pci_device = 0x1502 },
-	{ .pci_vendor = 0x8086, .pci_device = 0x1503 },
+	{ 0x8086, 0x1502, PCI_ANY_ID, PCI_ANY_ID },
+	{ 0x8086, 0x1503, PCI_ANY_ID, PCI_ANY_ID },
 	/* HP 745 G3 laptop */
-	{ .pci_vendor = 0x14e4, .pci_device = 0x1687 },
+	{ 0x14e4, 0x1687, PCI_ANY_ID, PCI_ANY_ID },
 };
 
 /**
@@ -836,14 +848,30 @@ static const struct undinet_irq_broken undinet_irq_broken_list[] = {
  */
 static int undinet_irq_is_broken ( struct device_description *desc ) {
 	const struct undinet_irq_broken *broken;
+	struct pci_device pci;
+	uint16_t subsys_vendor;
+	uint16_t subsys;
 	unsigned int i;
 
+	/* Ignore non-PCI devices */
+	if ( desc->bus_type != BUS_TYPE_PCI )
+		return 0;
+
+	/* Read subsystem IDs */
+	pci_init ( &pci, desc->location );
+	pci_read_config_word ( &pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
+	pci_read_config_word ( &pci, PCI_SUBSYSTEM_ID, &subsys );
+
+	/* Check for a match against the broken device list */
 	for ( i = 0 ; i < ( sizeof ( undinet_irq_broken_list ) /
 			    sizeof ( undinet_irq_broken_list[0] ) ) ; i++ ) {
 		broken = &undinet_irq_broken_list[i];
-		if ( ( desc->bus_type == BUS_TYPE_PCI ) &&
-		     ( desc->vendor == broken->pci_vendor ) &&
-		     ( desc->device == broken->pci_device ) ) {
+		if ( ( broken->pci_vendor == desc->vendor ) &&
+		     ( broken->pci_device == desc->device ) &&
+		     ( ( broken->pci_subsys_vendor == subsys_vendor ) ||
+		       ( broken->pci_subsys_vendor == PCI_ANY_ID ) ) &&
+		     ( ( broken->pci_subsys == subsys ) ||
+		       ( broken->pci_subsys == PCI_ANY_ID ) ) ) {
 			return 1;
 		}
 	}
@@ -938,10 +966,9 @@ int undinet_probe ( struct undi_device *undi, struct device *dev ) {
 	memcpy ( netdev->ll_addr, undi_info.CurrentNodeAddress, ETH_ALEN );
 	undinic->irq = undi_info.IntNumber;
 	if ( undinic->irq > IRQ_MAX ) {
-		DBGC ( undinic, "UNDINIC %p has invalid IRQ %d\n",
+		DBGC ( undinic, "UNDINIC %p ignoring invalid IRQ %d\n",
 		       undinic, undinic->irq );
-		rc = -EINVAL;
-		goto err_bad_irq;
+		undinic->irq = 0;
 	}
 	DBGC ( undinic, "UNDINIC %p has MAC address %s and IRQ %d\n",
 	       undinic, eth_ntoa ( netdev->hw_addr ), undinic->irq );
@@ -984,7 +1011,6 @@ int undinet_probe ( struct undi_device *undi, struct device *dev ) {
 
  err_register:
  err_undi_get_iface_info:
- err_bad_irq:
  err_undi_get_information:
  err_undi_initialize:
 	/* Shut down UNDI stack */
