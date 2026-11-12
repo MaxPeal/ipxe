@@ -18,12 +18,18 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <errno.h>
+#include <endian.h>
 #include <ipxe/init.h>
+#include <ipxe/rotate.h>
 #include <ipxe/efi/efi.h>
+#include <ipxe/efi/efi_table.h>
 #include <ipxe/efi/efi_driver.h>
+#include <ipxe/efi/efi_path.h>
+#include <ipxe/efi/efi_cmdline.h>
 #include <ipxe/efi/Protocol/LoadedImage.h>
 
 /** Image handle passed to entry point */
@@ -31,6 +37,9 @@ EFI_HANDLE efi_image_handle;
 
 /** Loaded image protocol for this image */
 EFI_LOADED_IMAGE_PROTOCOL *efi_loaded_image;
+
+/** Device path for the loaded image's device handle */
+EFI_DEVICE_PATH_PROTOCOL *efi_loaded_image_path;
 
 /** System table passed to entry point
  *
@@ -41,11 +50,27 @@ EFI_LOADED_IMAGE_PROTOCOL *efi_loaded_image;
  */
 EFI_SYSTEM_TABLE * _C2 ( PLATFORM, _systab );
 
+/** Internal task priority level */
+EFI_TPL efi_internal_tpl = TPL_CALLBACK;
+
+/** External task priority level */
+EFI_TPL efi_external_tpl = TPL_APPLICATION;
+
 /** EFI shutdown is in progress */
 int efi_shutdown_in_progress;
 
 /** Event used to signal shutdown */
 static EFI_EVENT efi_shutdown_event;
+
+/** Stack cookie */
+unsigned long __stack_chk_guard;
+
+/** Exit function
+ *
+ * Cached to minimise external dependencies when a stack check
+ * failure is triggered.
+ */
+static EFI_EXIT efi_exit;
 
 /* Forward declarations */
 static EFI_STATUS EFIAPI efi_unload ( EFI_HANDLE image_handle );
@@ -60,6 +85,17 @@ static EFI_STATUS EFIAPI efi_unload ( EFI_HANDLE image_handle );
 static EFIAPI void efi_shutdown_hook ( EFI_EVENT event __unused,
 				       void *context __unused ) {
 
+	/* This callback is invoked at TPL_NOTIFY in order to ensure
+	 * that we have an opportunity to shut down cleanly before
+	 * other shutdown hooks perform destructive operations such as
+	 * disabling the IOMMU.
+	 *
+	 * Modify the internal task priority level so that no code
+	 * attempts to raise from TPL_NOTIFY to TPL_CALLBACK (which
+	 * would trigger a fatal exception).
+	 */
+	efi_internal_tpl = TPL_NOTIFY;
+
 	/* Mark shutdown as being in progress, to indicate that large
 	 * parts of the system (e.g. timers) are no longer functional.
 	 */
@@ -70,21 +106,43 @@ static EFIAPI void efi_shutdown_hook ( EFI_EVENT event __unused,
 }
 
 /**
- * Look up EFI configuration table
+ * Construct a stack cookie value
  *
- * @v guid		Configuration table GUID
- * @ret table		Configuration table, or NULL
+ * @v handle		Image handle
+ * @ret cookie		Stack cookie
  */
-static void * efi_find_table ( EFI_GUID *guid ) {
-	unsigned int i;
+__attribute__ (( noinline )) unsigned long
+efi_stack_cookie ( EFI_HANDLE handle ) {
+	unsigned long cookie = 0;
+	unsigned int rotation = ( 8 * sizeof ( cookie ) / 4 );
 
-	for ( i = 0 ; i < efi_systab->NumberOfTableEntries ; i++ ) {
-		if ( memcmp ( &efi_systab->ConfigurationTable[i].VendorGuid,
-			      guid, sizeof ( *guid ) ) == 0 )
-			return efi_systab->ConfigurationTable[i].VendorTable;
-	}
+	/* There is no viable source of entropy available at this
+	 * point.  Construct a value that is at least likely to vary
+	 * between platforms and invocations.
+	 */
+	cookie ^= ( ( unsigned long ) handle );
+	cookie = roll ( cookie, rotation );
+	cookie ^= ( ( unsigned long ) &handle );
+	cookie = roll ( cookie, rotation );
+	cookie ^= profile_timestamp();
+	cookie = roll ( cookie, rotation );
+	cookie ^= build_id;
 
-	return NULL;
+	/* Ensure that the value contains a NUL byte, to act as a
+	 * runaway string terminator.  Construct the NUL using a shift
+	 * rather than a mask, to avoid losing valuable entropy in the
+	 * lower-order bits.
+	 */
+	cookie <<= 8;
+
+	/* Ensure that the NUL byte is placed at the bottom of the
+	 * stack cookie, to avoid potential disclosure via an
+	 * unterminated string.
+	 */
+	if ( __BYTE_ORDER == __BIG_ENDIAN )
+		cookie >>= 8;
+
+	return cookie;
 }
 
 /**
@@ -99,7 +157,9 @@ EFI_STATUS efi_init ( EFI_HANDLE image_handle,
 	EFI_BOOT_SERVICES *bs;
 	struct efi_protocol *prot;
 	struct efi_config_table *tab;
-	void *loaded_image;
+	EFI_DEVICE_PATH_PROTOCOL *device_path;
+	void *device_path_copy;
+	size_t device_path_len;
 	EFI_STATUS efirc;
 	int rc;
 
@@ -129,6 +189,9 @@ EFI_STATUS efi_init ( EFI_HANDLE image_handle,
 	}
 	DBGC ( systab, "EFI handle %p systab %p\n", image_handle, systab );
 	bs = systab->BootServices;
+
+	/* Store abort function pointer */
+	efi_exit = bs->Exit;
 
 	/* Look up used protocols */
 	for_each_table_entry ( prot, EFI_PROTOCOLS ) {
@@ -161,19 +224,51 @@ EFI_STATUS efi_init ( EFI_HANDLE image_handle,
 		}
 	}
 
-	/* Get loaded image protocol */
-	if ( ( efirc = bs->OpenProtocol ( image_handle,
-				&efi_loaded_image_protocol_guid,
-				&loaded_image, image_handle, NULL,
-				EFI_OPEN_PROTOCOL_GET_PROTOCOL ) ) != 0 ) {
-		rc = -EEFI ( efirc );
+	/* Get loaded image protocol
+	 *
+	 * We assume that our loaded image protocol will not be
+	 * uninstalled while our image code is still running.
+	 */
+	if ( ( rc = efi_open_unsafe ( image_handle,
+				      &efi_loaded_image_protocol_guid,
+				      &efi_loaded_image ) ) != 0 ) {
 		DBGC ( systab, "EFI could not get loaded image protocol: %s",
 		       strerror ( rc ) );
+		efirc = EFIRC ( rc );
 		goto err_no_loaded_image;
 	}
-	efi_loaded_image = loaded_image;
 	DBGC ( systab, "EFI image base address %p\n",
 	       efi_loaded_image->ImageBase );
+
+	/* Record command line */
+	efi_cmdline = efi_loaded_image->LoadOptions;
+	efi_cmdline_len = efi_loaded_image->LoadOptionsSize;
+
+	/* Get loaded image's device handle's device path */
+	if ( ( rc = efi_open ( efi_loaded_image->DeviceHandle,
+			       &efi_device_path_protocol_guid,
+			       &device_path ) ) != 0 ) {
+		DBGC ( systab, "EFI could not get loaded image's device path: "
+		       "%s", strerror ( rc ) );
+		efirc = EFIRC ( rc );
+		goto err_no_device_path;
+	}
+
+	/* Make a copy of the loaded image's device handle's device
+	 * path, since the device handle itself may become invalidated
+	 * when we load our own drivers.
+	 */
+	device_path_len = ( efi_path_len ( device_path ) +
+			    sizeof ( EFI_DEVICE_PATH_PROTOCOL ) );
+	if ( ( efirc = bs->AllocatePool ( EfiBootServicesData, device_path_len,
+					  &device_path_copy ) ) != 0 ) {
+		rc = -EEFI ( efirc );
+		goto err_alloc_device_path;
+	}
+	memcpy ( device_path_copy, device_path, device_path_len );
+	efi_loaded_image_path = device_path_copy;
+	DBGC ( systab, "EFI image device path %s\n",
+	       efi_devpath_text ( efi_loaded_image_path ) );
 
 	/* EFI is perfectly capable of gracefully shutting down any
 	 * loaded devices if it decides to fall back to a legacy boot.
@@ -181,7 +276,7 @@ EFI_STATUS efi_init ( EFI_HANDLE image_handle,
 	 * bother doing so when ExitBootServices() is called.
 	 */
 	if ( ( efirc = bs->CreateEvent ( EVT_SIGNAL_EXIT_BOOT_SERVICES,
-					 TPL_CALLBACK, efi_shutdown_hook,
+					 TPL_NOTIFY, efi_shutdown_hook,
 					 NULL, &efi_shutdown_event ) ) != 0 ) {
 		rc = -EEFI ( efirc );
 		DBGC ( systab, "EFI could not create ExitBootServices event: "
@@ -206,6 +301,9 @@ EFI_STATUS efi_init ( EFI_HANDLE image_handle,
  err_driver_install:
 	bs->CloseEvent ( efi_shutdown_event );
  err_create_event:
+	bs->FreePool ( efi_loaded_image_path );
+ err_alloc_device_path:
+ err_no_device_path:
  err_no_loaded_image:
  err_missing_table:
  err_missing_protocol:
@@ -221,8 +319,12 @@ EFI_STATUS efi_init ( EFI_HANDLE image_handle,
 static EFI_STATUS EFIAPI efi_unload ( EFI_HANDLE image_handle __unused ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	EFI_SYSTEM_TABLE *systab = efi_systab;
+	struct efi_saved_tpl tpl;
 
 	DBGC ( systab, "EFI image unloading\n" );
+
+	/* Raise TPL */
+	efi_raise_tpl ( &tpl );
 
 	/* Shut down */
 	shutdown_exit();
@@ -236,7 +338,98 @@ static EFI_STATUS EFIAPI efi_unload ( EFI_HANDLE image_handle __unused ) {
 	/* Uninstall exit boot services event */
 	bs->CloseEvent ( efi_shutdown_event );
 
+	/* Free copy of loaded image's device handle's device path */
+	bs->FreePool ( efi_loaded_image_path );
+
 	DBGC ( systab, "EFI image unloaded\n" );
 
+	/* Restore TPL */
+	efi_restore_tpl ( &tpl );
+
 	return 0;
+}
+
+/**
+ * Abort on stack check failure
+ *
+ */
+__attribute__ (( noreturn )) void __stack_chk_fail ( void ) {
+	EFI_STATUS efirc;
+	int rc;
+
+	/* Report failure (when debugging) */
+	DBGC ( efi_systab, "EFI stack check failed (cookie %#lx); aborting\n",
+	       __stack_chk_guard );
+
+	/* Attempt to exit cleanly with an error status */
+	if ( efi_exit ) {
+		efirc = efi_exit ( efi_image_handle, EFI_COMPROMISED_DATA,
+				   0, NULL );
+		rc = -EEFI ( efirc );
+		DBGC ( efi_systab, "EFI stack check exit failed: %s\n",
+		       strerror ( rc ) );
+	}
+
+	/* If the exit fails for any reason, lock the system */
+	while ( 1 ) {}
+
+}
+
+/**
+ * Raise task priority level to internal level
+ *
+ * @v tpl		Saved TPL
+ */
+void efi_raise_tpl ( struct efi_saved_tpl *tpl ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+
+	/* Record current external TPL */
+	tpl->previous = efi_external_tpl;
+
+	/* Raise TPL and record previous TPL as new external TPL */
+	tpl->current = bs->RaiseTPL ( efi_internal_tpl );
+	efi_external_tpl = tpl->current;
+}
+
+/**
+ * Restore saved task priority level
+ *
+ * @v tpl		Saved TPL
+ */
+void efi_restore_tpl ( struct efi_saved_tpl *tpl ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+
+	/* Restore external TPL */
+	efi_external_tpl = tpl->previous;
+
+	/* Restore TPL */
+	bs->RestoreTPL ( tpl->current );
+}
+
+/**
+ * Drop task priority level temporarily to external level
+ *
+ * @v tpl		Dropped TPL
+ */
+void efi_drop_tpl ( struct efi_dropped_tpl *tpl ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+
+	/* Raise TPL temporarily to discover current TPL */
+	tpl->current = bs->RaiseTPL ( TPL_HIGH_LEVEL );
+	bs->RestoreTPL ( tpl->current );
+
+	/* Drop to external TPL */
+	bs->RestoreTPL ( efi_external_tpl );
+}
+
+/**
+ * Restore dropped task priority level
+ *
+ * @v tpl		Dropped TPL
+ */
+void efi_undrop_tpl ( struct efi_dropped_tpl *tpl ) {
+	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+
+	/* Raise back to original TPL */
+	bs->RaiseTPL ( tpl->current );
 }

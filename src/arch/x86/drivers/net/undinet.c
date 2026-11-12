@@ -33,6 +33,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/netdevice.h>
 #include <ipxe/if_ether.h>
 #include <ipxe/ethernet.h>
+#include <ipxe/pci.h>
 #include <ipxe/profile.h>
 #include <undi.h>
 #include <undinet.h>
@@ -102,6 +103,13 @@ static union u_PXENV_ANY __bss16 ( undinet_params );
  */
 SEGOFF16_t __bss16 ( undinet_entry_point );
 #define undinet_entry_point __use_data16 ( undinet_entry_point )
+
+/* Read TSC in real mode only when profiling */
+#if PROFILING
+#define RDTSC_IF_PROFILING "rdtsc\n\t"
+#else
+#define RDTSC_IF_PROFILING ""
+#endif
 
 /** IRQ profiler */
 static struct profiler undinet_irq_profiler __profiler =
@@ -287,14 +295,14 @@ static int undinet_call ( struct undi_nic *undinic, unsigned int function,
 	 */
 	profile_start ( &profiler->total );
 	__asm__ __volatile__ ( REAL_CODE ( "pushl %%ebp\n\t" /* gcc bug */
-					   "rdtsc\n\t"
+					   RDTSC_IF_PROFILING
 					   "pushl %%eax\n\t"
 					   "pushw %%es\n\t"
 					   "pushw %%di\n\t"
 					   "pushw %%bx\n\t"
 					   "lcall *undinet_entry_point\n\t"
 					   "movw %%ax, %%bx\n\t"
-					   "rdtsc\n\t"
+					   RDTSC_IF_PROFILING
 					   "addw $6, %%sp\n\t"
 					   "popl %%edx\n\t"
 					   "popl %%ebp\n\t" /* gcc bug */ )
@@ -365,6 +373,18 @@ extern void undiisr ( void );
 uint8_t __data16 ( undiisr_irq );
 #define undiisr_irq __use_data16 ( undiisr_irq )
 
+/** IRQ mask register */
+uint16_t __data16 ( undiisr_imr );
+#define undiisr_imr __use_data16 ( undiisr_imr )
+
+/** IRQ mask bit */
+uint8_t __data16 ( undiisr_bit );
+#define undiisr_bit __use_data16 ( undiisr_bit )
+
+/** IRQ rearm flag */
+uint8_t __data16 ( undiisr_rearm );
+#define undiisr_rearm __use_data16 ( undiisr_rearm )
+
 /** IRQ chain vector */
 struct segoff __data16 ( undiisr_next_handler );
 #define undiisr_next_handler __use_data16 ( undiisr_next_handler )
@@ -387,6 +407,9 @@ static void undinet_hook_isr ( unsigned int irq ) {
 	assert ( undiisr_irq == 0 );
 
 	undiisr_irq = irq;
+	undiisr_imr = IMR_REG ( irq );
+	undiisr_bit = IMR_BIT ( irq );
+	undiisr_rearm = 0;
 	hook_bios_interrupt ( IRQ_INT ( irq ), ( ( intptr_t ) undiisr ),
 			      &undiisr_next_handler );
 }
@@ -469,6 +492,12 @@ static int undinet_transmit ( struct net_device *netdev,
 	 * assuming that a TX will be complete by the time we want to
 	 * transmit the next packet.
 	 */
+
+	/* Pad to minimum Ethernet length, to work around underlying
+	 * drivers that do not correctly handle frame padding
+	 * themselves.
+	 */
+	iob_pad ( iobuf, ETH_ZLEN );
 
 	/* Some PXE stacks are unable to cope with P_UNKNOWN, and will
 	 * always try to prepend a link-layer header.  Work around
@@ -580,6 +609,14 @@ static void undinet_poll ( struct net_device *netdev ) {
 		 * support interrupts.
 		 */
 		if ( ! undinet_isr_triggered() ) {
+
+			/* Rearm interrupt if needed */
+			if ( undiisr_rearm ) {
+				undiisr_rearm = 0;
+				assert ( undinic->irq != 0 );
+				enable_irq ( undinic->irq );
+			}
+
 			/* Allow interrupt to occur */
 			profile_start ( &undinet_irq_profiler );
 			__asm__ __volatile__ ( "sti\n\t"
@@ -807,6 +844,10 @@ struct undinet_irq_broken {
 	uint16_t pci_vendor;
 	/** PCI device ID */
 	uint16_t pci_device;
+	/** PCI subsystem vendor ID */
+	uint16_t pci_subsys_vendor;
+	/** PCI subsystem ID */
+	uint16_t pci_subsys;
 };
 
 /**
@@ -822,31 +863,67 @@ struct undinet_irq_broken {
  */
 static const struct undinet_irq_broken undinet_irq_broken_list[] = {
 	/* HP XX70x laptops */
-	{ .pci_vendor = 0x8086, .pci_device = 0x1502 },
-	{ .pci_vendor = 0x8086, .pci_device = 0x1503 },
+	{ 0x8086, 0x1502, PCI_ANY_ID, PCI_ANY_ID },
+	{ 0x8086, 0x1503, PCI_ANY_ID, PCI_ANY_ID },
 	/* HP 745 G3 laptop */
-	{ .pci_vendor = 0x14e4, .pci_device = 0x1687 },
+	{ 0x14e4, 0x1687, PCI_ANY_ID, PCI_ANY_ID },
+	/* ASUSTeK KNPA-U16 server */
+	{ 0x8086, 0x1521, 0x1043, PCI_ANY_ID },
 };
 
 /**
  * Check for devices with broken support for generating interrupts
  *
- * @v desc		Device description
+ * @v netdev		Net device
  * @ret irq_is_broken	Interrupt support is broken; no interrupts are generated
  */
-static int undinet_irq_is_broken ( struct device_description *desc ) {
+static int undinet_irq_is_broken ( struct net_device *netdev ) {
+	struct undi_nic *undinic = netdev->priv;
+	struct device_description *desc = &netdev->dev->desc;
 	const struct undinet_irq_broken *broken;
+	struct pci_device pci;
+	uint16_t subsys_vendor;
+	uint16_t subsys;
 	unsigned int i;
 
+	/* Ignore non-PCI devices */
+	if ( desc->bus_type != BUS_TYPE_PCI )
+		return 0;
+
+	/* Read subsystem IDs */
+	pci_init ( &pci, desc->location );
+	pci_read_config_word ( &pci, PCI_SUBSYSTEM_VENDOR_ID, &subsys_vendor );
+	pci_read_config_word ( &pci, PCI_SUBSYSTEM_ID, &subsys );
+
+	/* Check for a match against the broken device list */
 	for ( i = 0 ; i < ( sizeof ( undinet_irq_broken_list ) /
 			    sizeof ( undinet_irq_broken_list[0] ) ) ; i++ ) {
 		broken = &undinet_irq_broken_list[i];
-		if ( ( desc->bus_type == BUS_TYPE_PCI ) &&
-		     ( desc->vendor == broken->pci_vendor ) &&
-		     ( desc->device == broken->pci_device ) ) {
+		if ( ( broken->pci_vendor == desc->vendor ) &&
+		     ( broken->pci_device == desc->device ) &&
+		     ( ( broken->pci_subsys_vendor == subsys_vendor ) ||
+		       ( broken->pci_subsys_vendor == PCI_ANY_ID ) ) &&
+		     ( ( broken->pci_subsys == subsys ) ||
+		       ( broken->pci_subsys == PCI_ANY_ID ) ) ) {
+			DBGC ( undinic, "UNDINIC %p %04x:%04x subsys "
+			       "%04x:%04x has broken interrupts\n",
+			       undinic, desc->vendor, desc->device,
+			       subsys_vendor, subsys );
 			return 1;
 		}
 	}
+
+	/* Check for a PCI Express capability.  Given the number of
+	 * issues found with legacy INTx emulation on PCIe systems, we
+	 * assume that there is a high chance of interrupts not
+	 * working on any PCIe device.
+	 */
+	if ( pci_find_capability ( &pci, PCI_CAP_ID_EXP ) ) {
+		DBGC ( undinic, "UNDINIC %p is PCI Express: assuming "
+		       "interrupts are unreliable\n", undinic );
+		return 1;
+	}
+
 	return 0;
 }
 
@@ -938,13 +1015,16 @@ int undinet_probe ( struct undi_device *undi, struct device *dev ) {
 	memcpy ( netdev->ll_addr, undi_info.CurrentNodeAddress, ETH_ALEN );
 	undinic->irq = undi_info.IntNumber;
 	if ( undinic->irq > IRQ_MAX ) {
-		DBGC ( undinic, "UNDINIC %p has invalid IRQ %d\n",
+		DBGC ( undinic, "UNDINIC %p ignoring invalid IRQ %d\n",
 		       undinic, undinic->irq );
-		rc = -EINVAL;
-		goto err_bad_irq;
+		undinic->irq = 0;
 	}
 	DBGC ( undinic, "UNDINIC %p has MAC address %s and IRQ %d\n",
 	       undinic, eth_ntoa ( netdev->hw_addr ), undinic->irq );
+	if ( undinic->irq ) {
+		/* Sanity check - prefix should have disabled the IRQ */
+		assert ( ! irq_enabled ( undinic->irq ) );
+	}
 
 	/* Get interface information */
 	memset ( &undi_iface, 0, sizeof ( undi_iface ) );
@@ -966,7 +1046,7 @@ int undinet_probe ( struct undi_device *undi, struct device *dev ) {
 		       undinic );
 		undinic->hacks |= UNDI_HACK_EB54;
 	}
-	if ( undinet_irq_is_broken ( &dev->desc ) ) {
+	if ( undinet_irq_is_broken ( netdev ) ) {
 		DBGC ( undinic, "UNDINIC %p forcing polling mode due to "
 		       "broken interrupts\n", undinic );
 		undinic->irq_supported = 0;
@@ -984,7 +1064,6 @@ int undinet_probe ( struct undi_device *undi, struct device *dev ) {
 
  err_register:
  err_undi_get_iface_info:
- err_bad_irq:
  err_undi_get_information:
  err_undi_initialize:
 	/* Shut down UNDI stack */
@@ -1053,3 +1132,21 @@ void undinet_remove ( struct undi_device *undi ) {
 
 	DBGC ( undinic, "UNDINIC %p removed\n", undinic );
 }
+
+/* Drag in objects via undinet_probe() */
+REQUIRING_SYMBOL ( undinet_probe );
+
+/* Drag in PCI configuration
+ *
+ * We don't need the full PCI bus support.  However, the overwhelming
+ * majority of UNDI devices are PCI-based and we already end up
+ * dragging in PCI configuration space support in order to be able to
+ * test for devices with broken interrupts.
+ *
+ * Dragging in the PCI configuration allows the PCI settings mechanism
+ * to also be present, which is often useful for end users.  The total
+ * cost is around 200 bytes in the final binary, which is acceptable
+ * for a generally very useful feature.  Users wanting to minimise the
+ * binary size can choose to explicitly disable PCI_SETTINGS.
+ */
+REQUIRE_OBJECT ( config_pci );

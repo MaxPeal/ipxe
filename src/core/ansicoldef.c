@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdio.h>
 #include <errno.h>
@@ -42,7 +43,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  * @v rgb		24-bit RGB value (or ANSICOL_NO_RGB)
  * @ret ansicol		ANSI colour definition
  */
-#define ANSICOL_DEFINE( basic, rgb ) ( ( (basic) << 28 ) | (rgb) )
+#define ANSICOL_DEFINE( basic, rgb ) \
+	( ( ( ( unsigned int ) (basic) ) << 28 ) | (rgb) )
 
 /**
  * Extract basic colour from ANSI colour definition

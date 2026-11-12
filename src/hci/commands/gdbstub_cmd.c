@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( FORBIDDEN );
 
 #include <stdio.h>
 #include <errno.h>
@@ -107,9 +108,4 @@ static int gdbstub_exec ( int argc, char **argv ) {
 }
 
 /** GDB stub commands */
-struct command gdbstub_commands[] __command = {
-	{
-		.name = "gdbstub",
-		.exec = gdbstub_exec,
-	},
-};
+COMMAND ( gdbstub, gdbstub_exec );

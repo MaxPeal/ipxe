@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdlib.h>
 #include <stdio.h>
@@ -31,12 +32,11 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <errno.h>
 #include <byteswap.h>
 #include <ipxe/malloc.h>
-#include <ipxe/umalloc.h>
 #include <ipxe/pci.h>
 #include <ipxe/usb.h>
 #include <ipxe/init.h>
 #include <ipxe/profile.h>
-#include "xhci.h"
+#include <ipxe/xhci.h>
 
 /** @file
  *
@@ -260,9 +260,8 @@ static struct profiler xhci_transfer_profiler __profiler =
  * Initialise device
  *
  * @v xhci		xHCI device
- * @v regs		MMIO registers
  */
-static void xhci_init ( struct xhci_device *xhci, void *regs ) {
+void xhci_init ( struct xhci_device *xhci ) {
 	uint32_t hcsparams1;
 	uint32_t hcsparams2;
 	uint32_t hccparams1;
@@ -271,8 +270,11 @@ static void xhci_init ( struct xhci_device *xhci, void *regs ) {
 	size_t rtsoff;
 	size_t dboff;
 
+	/* Set device name */
+	xhci->name = xhci->dev->name;
+
 	/* Locate capability, operational, runtime, and doorbell registers */
-	xhci->cap = regs;
+	xhci->cap = xhci->regs;
 	caplength = readb ( xhci->cap + XHCI_CAP_CAPLENGTH );
 	rtsoff = readl ( xhci->cap + XHCI_CAP_RTSOFF );
 	dboff = readl ( xhci->cap + XHCI_CAP_DBOFF );
@@ -294,9 +296,9 @@ static void xhci_init ( struct xhci_device *xhci, void *regs ) {
 
 	/* Read structural parameters 2 */
 	hcsparams2 = readl ( xhci->cap + XHCI_CAP_HCSPARAMS2 );
-	xhci->scratchpads = XHCI_HCSPARAMS2_SCRATCHPADS ( hcsparams2 );
+	xhci->scratch.count = XHCI_HCSPARAMS2_SCRATCHPADS ( hcsparams2 );
 	DBGC2 ( xhci, "XHCI %s needs %d scratchpads\n",
-		xhci->name, xhci->scratchpads );
+		xhci->name, xhci->scratch.count );
 
 	/* Read capability parameters 1 */
 	hccparams1 = readl ( xhci->cap + XHCI_CAP_HCCPARAMS1 );
@@ -311,6 +313,10 @@ static void xhci_init ( struct xhci_device *xhci, void *regs ) {
 	assert ( ( ( xhci->pagesize ) & ( xhci->pagesize - 1 ) ) == 0 );
 	DBGC2 ( xhci, "XHCI %s page size %zd bytes\n",
 		xhci->name, xhci->pagesize );
+
+	/* Configure DMA device */
+	if ( xhci->dma && xhci->addr64 )
+		dma_set_mask_64bit ( xhci->dma );
 }
 
 /**
@@ -801,34 +807,41 @@ static int xhci_port_speed ( struct xhci_device *xhci, unsigned int port,
 	ports = readl ( xhci->cap + supported + XHCI_SUPPORTED_PORTS );
 	psic = XHCI_SUPPORTED_PORTS_PSIC ( ports );
 
-	/* Use the default mappings if applicable */
-	if ( ( psic == 0 ) || ( xhci->quirks & XHCI_BAD_PSIV ) ) {
-		switch ( psiv ) {
-		case XHCI_SPEED_LOW :	return USB_SPEED_LOW;
-		case XHCI_SPEED_FULL :	return USB_SPEED_FULL;
-		case XHCI_SPEED_HIGH :	return USB_SPEED_HIGH;
-		case XHCI_SPEED_SUPER :	return USB_SPEED_SUPER;
-		default:
-			DBGC ( xhci, "XHCI %s-%d non-standard PSI value %d\n",
+	/* Use protocol speed ID table unless device is known to be faulty */
+	if ( ! ( xhci->quirks & XHCI_BAD_PSIV ) ) {
+
+		/* Iterate over PSI dwords looking for a match */
+		for ( i = 0 ; i < psic ; i++ ) {
+			psi = readl ( xhci->cap + supported +
+				      XHCI_SUPPORTED_PSI ( i ) );
+			if ( psiv == XHCI_SUPPORTED_PSI_VALUE ( psi ) ) {
+				mantissa = XHCI_SUPPORTED_PSI_MANTISSA ( psi );
+				exponent = XHCI_SUPPORTED_PSI_EXPONENT ( psi );
+				speed = USB_SPEED ( mantissa, exponent );
+				return speed;
+			}
+		}
+
+		/* Record device as faulty if no match is found */
+		if ( psic != 0 ) {
+			DBGC ( xhci, "XHCI %s-%d spurious PSI value %d: "
+			       "assuming PSI table is invalid\n",
 			       xhci->name, port, psiv );
-			return -ENOTSUP;
+			xhci->quirks |= XHCI_BAD_PSIV;
 		}
 	}
 
-	/* Iterate over PSI dwords looking for a match */
-	for ( i = 0 ; i < psic ; i++ ) {
-		psi = readl ( xhci->cap + supported + XHCI_SUPPORTED_PSI ( i ));
-		if ( psiv == XHCI_SUPPORTED_PSI_VALUE ( psi ) ) {
-			mantissa = XHCI_SUPPORTED_PSI_MANTISSA ( psi );
-			exponent = XHCI_SUPPORTED_PSI_EXPONENT ( psi );
-			speed = USB_SPEED ( mantissa, exponent );
-			return speed;
-		}
+	/* Use the default mappings */
+	switch ( psiv ) {
+	case XHCI_SPEED_LOW :	return USB_SPEED_LOW;
+	case XHCI_SPEED_FULL :	return USB_SPEED_FULL;
+	case XHCI_SPEED_HIGH :	return USB_SPEED_HIGH;
+	case XHCI_SPEED_SUPER :	return USB_SPEED_SUPER;
+	default:
+		DBGC ( xhci, "XHCI %s-%d unrecognised PSI value %d\n",
+		       xhci->name, port, psiv );
+		return -ENOTSUP;
 	}
-
-	DBGC ( xhci, "XHCI %s-%d spurious PSI value %d\n",
-	       xhci->name, port, psiv );
-	return -ENOENT;
 }
 
 /**
@@ -911,27 +924,29 @@ static int xhci_dcbaa_alloc ( struct xhci_device *xhci ) {
 	 * align on its own size (rounded up to a power of two and
 	 * with a minimum of 64 bytes).
 	 */
-	len = ( ( xhci->slots + 1 ) * sizeof ( xhci->dcbaa[0] ) );
-	xhci->dcbaa = malloc_dma ( len, xhci_align ( len ) );
-	if ( ! xhci->dcbaa ) {
+	len = ( ( xhci->slots + 1 ) * sizeof ( xhci->dcbaa.context[0] ) );
+	xhci->dcbaa.context = dma_alloc ( xhci->dma, &xhci->dcbaa.map, len,
+					  xhci_align ( len ) );
+	if ( ! xhci->dcbaa.context ) {
 		DBGC ( xhci, "XHCI %s could not allocate DCBAA\n", xhci->name );
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
-	memset ( xhci->dcbaa, 0, len );
+	memset ( xhci->dcbaa.context, 0, len );
 
 	/* Program DCBAA pointer */
-	dcbaap = virt_to_phys ( xhci->dcbaa );
+	dcbaap = dma ( &xhci->dcbaa.map, xhci->dcbaa.context );
 	if ( ( rc = xhci_writeq ( xhci, dcbaap,
 				  xhci->op + XHCI_OP_DCBAAP ) ) != 0 )
 		goto err_writeq;
 
-	DBGC2 ( xhci, "XHCI %s DCBAA at [%08lx,%08lx)\n",
-		xhci->name, dcbaap, ( dcbaap + len ) );
+	DBGC2 ( xhci, "XHCI %s DCBAA at [%08lx,%08lx)\n", xhci->name,
+		virt_to_phys ( xhci->dcbaa.context ),
+		( virt_to_phys ( xhci->dcbaa.context ) + len ) );
 	return 0;
 
  err_writeq:
-	free_dma ( xhci->dcbaa, len );
+	dma_free ( &xhci->dcbaa.map, xhci->dcbaa.context, len );
  err_alloc:
 	return rc;
 }
@@ -947,14 +962,14 @@ static void xhci_dcbaa_free ( struct xhci_device *xhci ) {
 
 	/* Sanity check */
 	for ( i = 0 ; i <= xhci->slots ; i++ )
-		assert ( xhci->dcbaa[i] == 0 );
+		assert ( xhci->dcbaa.context[i] == 0 );
 
 	/* Clear DCBAA pointer */
 	xhci_writeq ( xhci, 0, xhci->op + XHCI_OP_DCBAAP );
 
 	/* Free DCBAA */
-	len = ( ( xhci->slots + 1 ) * sizeof ( xhci->dcbaa[0] ) );
-	free_dma ( xhci->dcbaa, len );
+	len = ( ( xhci->slots + 1 ) * sizeof ( xhci->dcbaa.context[0] ) );
+	dma_free ( &xhci->dcbaa.map, xhci->dcbaa.context, len );
 }
 
 /******************************************************************************
@@ -971,32 +986,34 @@ static void xhci_dcbaa_free ( struct xhci_device *xhci ) {
  * @ret rc		Return status code
  */
 static int xhci_scratchpad_alloc ( struct xhci_device *xhci ) {
+	struct xhci_scratchpad *scratch = &xhci->scratch;
+	size_t buffer_len;
 	size_t array_len;
-	size_t len;
-	physaddr_t phys;
+	physaddr_t addr;
 	unsigned int i;
 	int rc;
 
 	/* Do nothing if no scratchpad buffers are used */
-	if ( ! xhci->scratchpads )
+	if ( ! scratch->count )
 		return 0;
 
-	/* Allocate scratchpads */
-	len = ( xhci->scratchpads * xhci->pagesize );
-	xhci->scratchpad = umalloc ( len );
-	if ( ! xhci->scratchpad ) {
+	/* Allocate scratchpad buffers */
+	buffer_len = ( scratch->count * xhci->pagesize );
+	scratch->buffer = dma_umalloc ( xhci->dma, &scratch->buffer_map,
+					buffer_len, xhci->pagesize );
+	if ( ! scratch->buffer ) {
 		DBGC ( xhci, "XHCI %s could not allocate scratchpad buffers\n",
 		       xhci->name );
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
-	memset_user ( xhci->scratchpad, 0, 0, len );
+	memset ( scratch->buffer, 0, buffer_len );
 
 	/* Allocate scratchpad array */
-	array_len = ( xhci->scratchpads * sizeof ( xhci->scratchpad_array[0] ));
-	xhci->scratchpad_array =
-		malloc_dma ( array_len, xhci_align ( array_len ) );
-	if ( ! xhci->scratchpad_array ) {
+	array_len = ( scratch->count * sizeof ( scratch->array[0] ) );
+	scratch->array = dma_alloc ( xhci->dma, &scratch->array_map,
+				     array_len, xhci_align ( array_len ) );
+	if ( ! scratch->array ) {
 		DBGC ( xhci, "XHCI %s could not allocate scratchpad buffer "
 		       "array\n", xhci->name );
 		rc = -ENOMEM;
@@ -1004,25 +1021,27 @@ static int xhci_scratchpad_alloc ( struct xhci_device *xhci ) {
 	}
 
 	/* Populate scratchpad array */
-	for ( i = 0 ; i < xhci->scratchpads ; i++ ) {
-		phys = user_to_phys ( xhci->scratchpad, ( i * xhci->pagesize ));
-		xhci->scratchpad_array[i] = phys;
+	addr = dma ( &scratch->buffer_map, scratch->buffer );
+	for ( i = 0 ; i < scratch->count ; i++ ) {
+		scratch->array[i] = cpu_to_le64 ( addr );
+		addr += xhci->pagesize;
 	}
 
 	/* Set scratchpad array pointer */
-	assert ( xhci->dcbaa != NULL );
-	xhci->dcbaa[0] = cpu_to_le64 ( virt_to_phys ( xhci->scratchpad_array ));
+	assert ( xhci->dcbaa.context != NULL );
+	xhci->dcbaa.context[0] = cpu_to_le64 ( dma ( &scratch->array_map,
+						     scratch->array ) );
 
 	DBGC2 ( xhci, "XHCI %s scratchpad [%08lx,%08lx) array [%08lx,%08lx)\n",
-		xhci->name, user_to_phys ( xhci->scratchpad, 0 ),
-		user_to_phys ( xhci->scratchpad, len ),
-		virt_to_phys ( xhci->scratchpad_array ),
-		( virt_to_phys ( xhci->scratchpad_array ) + array_len ) );
+		xhci->name, virt_to_phys ( scratch->buffer ),
+		( virt_to_phys ( scratch->buffer ) + buffer_len ),
+		virt_to_phys ( scratch->array ),
+		( virt_to_phys ( scratch->array ) + array_len ) );
 	return 0;
 
-	free_dma ( xhci->scratchpad_array, array_len );
+	dma_free ( &scratch->array_map, scratch->array, array_len );
  err_alloc_array:
-	ufree ( xhci->scratchpad );
+	dma_ufree ( &scratch->buffer_map, scratch->buffer, buffer_len );
  err_alloc:
 	return rc;
 }
@@ -1033,22 +1052,25 @@ static int xhci_scratchpad_alloc ( struct xhci_device *xhci ) {
  * @v xhci		xHCI device
  */
 static void xhci_scratchpad_free ( struct xhci_device *xhci ) {
+	struct xhci_scratchpad *scratch = &xhci->scratch;
 	size_t array_len;
+	size_t buffer_len;
 
 	/* Do nothing if no scratchpad buffers are used */
-	if ( ! xhci->scratchpads )
+	if ( ! scratch->count )
 		return;
 
 	/* Clear scratchpad array pointer */
-	assert ( xhci->dcbaa != NULL );
-	xhci->dcbaa[0] = 0;
+	assert ( xhci->dcbaa.context != NULL );
+	xhci->dcbaa.context[0] = 0;
 
 	/* Free scratchpad array */
-	array_len = ( xhci->scratchpads * sizeof ( xhci->scratchpad_array[0] ));
-	free_dma ( xhci->scratchpad_array, array_len );
+	array_len = ( scratch->count * sizeof ( scratch->array[0] ) );
+	dma_free ( &scratch->array_map, scratch->array, array_len );
 
-	/* Free scratchpads */
-	ufree ( xhci->scratchpad );
+	/* Free scratchpad buffers */
+	buffer_len = ( scratch->count * xhci->pagesize );
+	dma_ufree ( &scratch->buffer_map, scratch->buffer, buffer_len );
 }
 
 /******************************************************************************
@@ -1149,6 +1171,31 @@ static int xhci_reset ( struct xhci_device *xhci ) {
 	return -ETIMEDOUT;
 }
 
+/**
+ * Mark xHCI device as permanently failed
+ *
+ * @v xhci		xHCI device
+ * @ret rc		Return status code
+ */
+static int xhci_fail ( struct xhci_device *xhci ) {
+	size_t len;
+	int rc;
+
+	/* Mark command mechanism as permanently failed */
+	xhci->failed = 1;
+
+	/* Reset device */
+	if ( ( rc = xhci_reset ( xhci ) ) != 0 )
+		return rc;
+
+	/* Discard DCBAA entries since DCBAAP has been cleared */
+	assert ( xhci->dcbaa.context != NULL );
+	len = ( ( xhci->slots + 1 ) * sizeof ( xhci->dcbaa.context[0] ) );
+	memset ( xhci->dcbaa.context, 0, len );
+
+	return 0;
+}
+
 /******************************************************************************
  *
  * Transfer request blocks
@@ -1195,7 +1242,8 @@ static int xhci_ring_alloc ( struct xhci_device *xhci,
 	}
 
 	/* Allocate TRBs */
-	ring->trb = malloc_dma ( ring->len, xhci_align ( ring->len ) );
+	ring->trb = dma_alloc ( xhci->dma, &ring->map, ring->len,
+				xhci_align ( ring->len ) );
 	if ( ! ring->trb ) {
 		rc = -ENOMEM;
 		goto err_alloc_trb;
@@ -1204,14 +1252,14 @@ static int xhci_ring_alloc ( struct xhci_device *xhci,
 
 	/* Initialise Link TRB */
 	link = &ring->trb[count].link;
-	link->next = cpu_to_le64 ( virt_to_phys ( ring->trb ) );
+	link->next = cpu_to_le64 ( dma ( &ring->map, ring->trb ) );
 	link->flags = XHCI_TRB_TC;
 	link->type = XHCI_TRB_LINK;
 	ring->link = link;
 
 	return 0;
 
-	free_dma ( ring->trb, ring->len );
+	dma_free ( &ring->map, ring->trb, ring->len );
  err_alloc_trb:
 	free ( ring->iobuf );
  err_alloc_iobuf:
@@ -1249,7 +1297,7 @@ static void xhci_ring_free ( struct xhci_trb_ring *ring ) {
 		assert ( ring->iobuf[i] == NULL );
 
 	/* Free TRBs */
-	free_dma ( ring->trb, ring->len );
+	dma_free ( &ring->map, ring->trb, ring->len );
 
 	/* Free I/O buffers */
 	free ( ring->iobuf );
@@ -1415,13 +1463,14 @@ static int xhci_command_alloc ( struct xhci_device *xhci ) {
 		goto err_ring_alloc;
 
 	/* Program command ring control register */
-	crp = virt_to_phys ( xhci->command.trb );
+	crp = dma ( &xhci->command.map, xhci->command.trb );
 	if ( ( rc = xhci_writeq ( xhci, ( crp | XHCI_CRCR_RCS ),
 				  xhci->op + XHCI_OP_CRCR ) ) != 0 )
 		goto err_writeq;
 
-	DBGC2 ( xhci, "XHCI %s CRCR at [%08lx,%08lx)\n",
-		xhci->name, crp, ( crp + xhci->command.len ) );
+	DBGC2 ( xhci, "XHCI %s CRCR at [%08lx,%08lx)\n", xhci->name,
+		virt_to_phys ( xhci->command.trb ),
+		( virt_to_phys ( xhci->command.trb ) + xhci->command.len ) );
 	return 0;
 
  err_writeq:
@@ -1462,7 +1511,8 @@ static int xhci_event_alloc ( struct xhci_device *xhci ) {
 	/* Allocate event ring */
 	count = ( 1 << XHCI_EVENT_TRBS_LOG2 );
 	len = ( count * sizeof ( event->trb[0] ) );
-	event->trb = malloc_dma ( len, xhci_align ( len ) );
+	event->trb = dma_alloc ( xhci->dma, &event->trb_map, len,
+				 xhci_align ( len ) );
 	if ( ! event->trb ) {
 		rc = -ENOMEM;
 		goto err_alloc_trb;
@@ -1470,22 +1520,25 @@ static int xhci_event_alloc ( struct xhci_device *xhci ) {
 	memset ( event->trb, 0, len );
 
 	/* Allocate event ring segment table */
-	event->segment = malloc_dma ( sizeof ( event->segment[0] ),
-				      xhci_align ( sizeof (event->segment[0])));
+	event->segment = dma_alloc ( xhci->dma, &event->segment_map,
+				     sizeof ( event->segment[0] ),
+				     xhci_align ( sizeof (event->segment[0])));
 	if ( ! event->segment ) {
 		rc = -ENOMEM;
 		goto err_alloc_segment;
 	}
 	memset ( event->segment, 0, sizeof ( event->segment[0] ) );
-	event->segment[0].base = cpu_to_le64 ( virt_to_phys ( event->trb ) );
+	event->segment[0].base = cpu_to_le64 ( dma ( &event->trb_map,
+						     event->trb ) );
 	event->segment[0].count = cpu_to_le32 ( count );
 
 	/* Program event ring registers */
 	writel ( 1, xhci->run + XHCI_RUN_ERSTSZ ( 0 ) );
-	if ( ( rc = xhci_writeq ( xhci, virt_to_phys ( event->trb ),
+	if ( ( rc = xhci_writeq ( xhci, dma ( &event->trb_map, event->trb ),
 				  xhci->run + XHCI_RUN_ERDP ( 0 ) ) ) != 0 )
 		goto err_writeq_erdp;
-	if ( ( rc = xhci_writeq ( xhci, virt_to_phys ( event->segment ),
+	if ( ( rc = xhci_writeq ( xhci,
+				  dma ( &event->segment_map, event->segment ),
 				  xhci->run + XHCI_RUN_ERSTBA ( 0 ) ) ) != 0 )
 		goto err_writeq_erstba;
 
@@ -1494,16 +1547,17 @@ static int xhci_event_alloc ( struct xhci_device *xhci ) {
 		( virt_to_phys ( event->trb ) + len ),
 		virt_to_phys ( event->segment ),
 		( virt_to_phys ( event->segment ) +
-		  sizeof (event->segment[0] ) ) );
+		  sizeof ( event->segment[0] ) ) );
 	return 0;
 
 	xhci_writeq ( xhci, 0, xhci->run + XHCI_RUN_ERSTBA ( 0 ) );
  err_writeq_erstba:
 	xhci_writeq ( xhci, 0, xhci->run + XHCI_RUN_ERDP ( 0 ) );
  err_writeq_erdp:
-	free_dma ( event->trb, len );
+	dma_free ( &event->segment_map, event->segment,
+		   sizeof ( event->segment[0] ) );
  err_alloc_segment:
-	free_dma ( event->segment, sizeof ( event->segment[0] ) );
+	dma_free ( &event->trb_map, event->trb, len );
  err_alloc_trb:
 	return rc;
 }
@@ -1524,12 +1578,13 @@ static void xhci_event_free ( struct xhci_device *xhci ) {
 	xhci_writeq ( xhci, 0, xhci->run + XHCI_RUN_ERDP ( 0 ) );
 
 	/* Free event ring segment table */
-	free_dma ( event->segment, sizeof ( event->segment[0] ) );
+	dma_free ( &event->segment_map, event->segment,
+		   sizeof ( event->segment[0] ) );
 
 	/* Free event ring */
 	count = ( 1 << XHCI_EVENT_TRBS_LOG2 );
 	len = ( count * sizeof ( event->trb[0] ) );
-	free_dma ( event->trb, len );
+	dma_free ( &event->trb_map, event->trb, len );
 }
 
 /**
@@ -1543,6 +1598,8 @@ static void xhci_transfer ( struct xhci_device *xhci,
 	struct xhci_slot *slot;
 	struct xhci_endpoint *endpoint;
 	struct io_buffer *iobuf;
+	uint32_t cmplt;
+	unsigned int code;
 	int rc;
 
 	/* Profile transfer events */
@@ -1570,14 +1627,21 @@ static void xhci_transfer ( struct xhci_device *xhci,
 	iobuf = xhci_dequeue_multi ( &endpoint->ring );
 	assert ( iobuf != NULL );
 
+	/* Unmap I/O buffer */
+	iob_unmap ( iobuf );
+
+	/* Parse completion */
+	cmplt = le32_to_cpu ( trb->cmplt );
+	code = XHCI_CMPLT_CODE ( cmplt );
+
 	/* Check for errors */
-	if ( ! ( ( trb->code == XHCI_CMPLT_SUCCESS ) ||
-		 ( trb->code == XHCI_CMPLT_SHORT ) ) ) {
+	if ( ! ( ( code == XHCI_CMPLT_SUCCESS ) ||
+		 ( code == XHCI_CMPLT_SHORT ) ) ) {
 
 		/* Construct error */
-		rc = -ECODE ( trb->code );
+		rc = -ECODE ( code );
 		DBGC ( xhci, "XHCI %s slot %d ctx %d failed (code %d): %s\n",
-		       xhci->name, slot->id, endpoint->ctx, trb->code,
+		       xhci->name, slot->id, endpoint->ctx, code,
 		       strerror ( rc ) );
 		DBGC_HDA ( xhci, 0, trb, sizeof ( *trb ) );
 
@@ -1591,7 +1655,7 @@ static void xhci_transfer ( struct xhci_device *xhci,
 	}
 
 	/* Record actual transfer size */
-	iob_unput ( iobuf, le16_to_cpu ( trb->residual ) );
+	iob_unput ( iobuf, XHCI_CMPLT_RESIDUAL ( cmplt ) );
 
 	/* Sanity check (for successful completions only) */
 	assert ( xhci_ring_consumed ( &endpoint->ring ) ==
@@ -1693,6 +1757,10 @@ static void xhci_event_poll ( struct xhci_device *xhci ) {
 	unsigned int consumed;
 	unsigned int type;
 
+	/* Do nothing if device has permanently failed */
+	if ( xhci->failed )
+		return;
+
 	/* Poll for events */
 	profile_start ( &xhci_event_profiler );
 	for ( consumed = 0 ; ; consumed++ ) {
@@ -1703,6 +1771,9 @@ static void xhci_event_poll ( struct xhci_device *xhci ) {
 		if ( ! ( ( trb->common.flags ^
 			   ( event->cons >> shift ) ) & XHCI_TRB_C ) )
 			break;
+
+		/* Consume this TRB */
+		event->cons++;
 
 		/* Handle TRB */
 		type = ( trb->common.type & XHCI_TRB_TYPE_MASK );
@@ -1726,19 +1797,16 @@ static void xhci_event_poll ( struct xhci_device *xhci ) {
 
 		default:
 			DBGC ( xhci, "XHCI %s unrecognised event %#x\n:",
-			       xhci->name, event->cons );
+			       xhci->name, ( event->cons - 1 ) );
 			DBGC_HDA ( xhci, virt_to_phys ( trb ),
 				   trb, sizeof ( *trb ) );
 			break;
 		}
-
-		/* Consume this TRB */
-		event->cons++;
 	}
 
 	/* Update dequeue pointer if applicable */
 	if ( consumed ) {
-		xhci_writeq ( xhci, virt_to_phys ( trb ),
+		xhci_writeq ( xhci, dma ( &event->trb_map, trb ),
 			      xhci->run + XHCI_RUN_ERDP ( 0 ) );
 		profile_stop ( &xhci_event_profiler );
 	}
@@ -1751,6 +1819,7 @@ static void xhci_event_poll ( struct xhci_device *xhci ) {
  */
 static void xhci_abort ( struct xhci_device *xhci ) {
 	physaddr_t crp;
+	uint32_t crcr;
 
 	/* Abort the command */
 	DBGC2 ( xhci, "XHCI %s aborting command\n", xhci->name );
@@ -1759,15 +1828,25 @@ static void xhci_abort ( struct xhci_device *xhci ) {
 	/* Allow time for command to abort */
 	mdelay ( XHCI_COMMAND_ABORT_DELAY_MS );
 
-	/* Sanity check */
-	assert ( ( readl ( xhci->op + XHCI_OP_CRCR ) & XHCI_CRCR_CRR ) == 0 );
+	/* Check for failure to abort */
+	crcr = readl ( xhci->op + XHCI_OP_CRCR );
+	if ( crcr & XHCI_CRCR_CRR ) {
+
+		/* Device has failed to abort a command and is almost
+		 * certainly beyond repair.  Reset device, abandoning
+		 * all state, and mark device as failed to avoid
+		 * delays on any future command attempts.
+		 */
+		DBGC ( xhci, "XHCI %s failed to abort command\n", xhci->name );
+		xhci_fail ( xhci );
+	}
 
 	/* Consume (and ignore) any final command status */
 	xhci_event_poll ( xhci );
 
 	/* Reset the command ring control register */
 	xhci_ring_reset ( &xhci->command );
-	crp = virt_to_phys ( xhci->command.trb );
+	crp = dma ( &xhci->command.map, xhci->command.trb );
 	xhci_writeq ( xhci, ( crp | XHCI_CRCR_RCS ), xhci->op + XHCI_OP_CRCR );
 }
 
@@ -1785,6 +1864,19 @@ static int xhci_command ( struct xhci_device *xhci, union xhci_trb *trb ) {
 	struct xhci_trb_complete *complete = &trb->complete;
 	unsigned int i;
 	int rc;
+
+	/* Immediately fail all commands if command mechanism has failed */
+	if ( xhci->failed ) {
+		rc = -EPIPE;
+		goto err_failed;
+	}
+
+	/* Sanity check */
+	if ( xhci->pending ) {
+		DBGC ( xhci, "XHCI %s command ring busy\n", xhci->name );
+		rc = -EBUSY;
+		goto err_pending;
+	}
 
 	/* Record the pending command */
 	xhci->pending = trb;
@@ -1828,6 +1920,8 @@ static int xhci_command ( struct xhci_device *xhci, union xhci_trb *trb ) {
 
  err_enqueue:
 	xhci->pending = NULL;
+ err_pending:
+ err_failed:
 	return rc;
 }
 
@@ -1848,9 +1942,13 @@ static inline int xhci_nop ( struct xhci_device *xhci ) {
 	nop->type = XHCI_TRB_NOP_CMD;
 
 	/* Issue command and wait for completion */
-	if ( ( rc = xhci_command ( xhci, &trb ) ) != 0 )
+	if ( ( rc = xhci_command ( xhci, &trb ) ) != 0 ) {
+		DBGC ( xhci, "XHCI %s NOP failed: %s\n",
+		       xhci->name, strerror ( rc ) );
 		return rc;
+	}
 
+	DBGC2 ( xhci, "XHCI %s NOP completed successfully\n", xhci->name );
 	return 0;
 }
 
@@ -1935,13 +2033,15 @@ static int xhci_context ( struct xhci_device *xhci, struct xhci_slot *slot,
 						void *input ) ) {
 	union xhci_trb trb;
 	struct xhci_trb_context *context = &trb.context;
+	struct dma_mapping map;
 	size_t len;
 	void *input;
 	int rc;
 
 	/* Allocate an input context */
+	memset ( &map, 0, sizeof ( map ) );
 	len = xhci_input_context_offset ( xhci, XHCI_CTX_END );
-	input = malloc_dma ( len, xhci_align ( len ) );
+	input = dma_alloc ( xhci->dma, &map, len, xhci_align ( len ) );
 	if ( ! input ) {
 		rc = -ENOMEM;
 		goto err_alloc;
@@ -1954,7 +2054,7 @@ static int xhci_context ( struct xhci_device *xhci, struct xhci_slot *slot,
 	/* Construct command */
 	memset ( context, 0, sizeof ( *context ) );
 	context->type = type;
-	context->input = cpu_to_le64 ( virt_to_phys ( input ) );
+	context->input = cpu_to_le64 ( dma ( &map, input ) );
 	context->slot = slot->id;
 
 	/* Issue command and wait for completion */
@@ -1962,7 +2062,7 @@ static int xhci_context ( struct xhci_device *xhci, struct xhci_slot *slot,
 		goto err_command;
 
  err_command:
-	free_dma ( input, len );
+	dma_free ( &map, input, len );
  err_alloc:
 	return rc;
 }
@@ -1979,6 +2079,7 @@ static void xhci_address_device_input ( struct xhci_device *xhci,
 					struct xhci_slot *slot,
 					struct xhci_endpoint *endpoint,
 					void *input ) {
+	struct xhci_trb_ring *ring = &endpoint->ring;
 	struct xhci_control_context *control_ctx;
 	struct xhci_slot_context *slot_ctx;
 	struct xhci_endpoint_context *ep_ctx;
@@ -2004,7 +2105,7 @@ static void xhci_address_device_input ( struct xhci_device *xhci,
 	ep_ctx->type = XHCI_EP_TYPE_CONTROL;
 	ep_ctx->burst = endpoint->ep->burst;
 	ep_ctx->mtu = cpu_to_le16 ( endpoint->ep->mtu );
-	ep_ctx->dequeue = cpu_to_le64 ( virt_to_phys ( endpoint->ring.trb ) |
+	ep_ctx->dequeue = cpu_to_le64 ( dma ( &ring->map, ring->trb ) |
 					XHCI_EP_DCS );
 	ep_ctx->trb_len = cpu_to_le16 ( XHCI_EP0_TRB_LEN );
 }
@@ -2025,15 +2126,18 @@ static inline int xhci_address_device ( struct xhci_device *xhci,
 	/* Assign device address */
 	if ( ( rc = xhci_context ( xhci, slot, slot->endpoint[XHCI_CTX_EP0],
 				   XHCI_TRB_ADDRESS_DEVICE,
-				   xhci_address_device_input ) ) != 0 )
+				   xhci_address_device_input ) ) != 0 ) {
+		DBGC ( xhci, "XHCI %s slot %d could not assign address: %s\n",
+		       xhci->name, slot->id, strerror ( rc ) );
 		return rc;
+	}
 
 	/* Get assigned address */
 	slot_ctx = ( slot->context +
 		     xhci_device_context_offset ( xhci, XHCI_CTX_SLOT ) );
 	usb->address = slot_ctx->address;
-	DBGC2 ( xhci, "XHCI %s assigned address %d to %s\n",
-		xhci->name, usb->address, usb->name );
+	DBGC2 ( xhci, "XHCI %s slot %d assigned address %d to %s\n",
+		xhci->name, slot->id, usb->address, usb->name );
 
 	return 0;
 }
@@ -2050,6 +2154,7 @@ static void xhci_configure_endpoint_input ( struct xhci_device *xhci,
 					    struct xhci_slot *slot,
 					    struct xhci_endpoint *endpoint,
 					    void *input ) {
+	struct xhci_trb_ring *ring = &endpoint->ring;
 	struct xhci_control_context *control_ctx;
 	struct xhci_slot_context *slot_ctx;
 	struct xhci_endpoint_context *ep_ctx;
@@ -2061,7 +2166,7 @@ static void xhci_configure_endpoint_input ( struct xhci_device *xhci,
 
 	/* Populate slot context */
 	slot_ctx = ( input + xhci_input_context_offset ( xhci, XHCI_CTX_SLOT ));
-	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1 ),
+	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1U ),
 							( slot->ports ? 1 : 0 ),
 							slot->psiv, 0 ) );
 	slot_ctx->ports = slot->ports;
@@ -2072,7 +2177,7 @@ static void xhci_configure_endpoint_input ( struct xhci_device *xhci,
 	ep_ctx->type = endpoint->type;
 	ep_ctx->burst = endpoint->ep->burst;
 	ep_ctx->mtu = cpu_to_le16 ( endpoint->ep->mtu );
-	ep_ctx->dequeue = cpu_to_le64 ( virt_to_phys ( endpoint->ring.trb ) |
+	ep_ctx->dequeue = cpu_to_le64 ( dma ( &ring->map, ring->trb ) |
 					XHCI_EP_DCS );
 	ep_ctx->trb_len = cpu_to_le16 ( endpoint->ep->mtu ); /* best guess */
 }
@@ -2093,8 +2198,11 @@ static inline int xhci_configure_endpoint ( struct xhci_device *xhci,
 	/* Configure endpoint */
 	if ( ( rc = xhci_context ( xhci, slot, endpoint,
 				   XHCI_TRB_CONFIGURE_ENDPOINT,
-				   xhci_configure_endpoint_input ) ) != 0 )
+				   xhci_configure_endpoint_input ) ) != 0 ) {
+		DBGC ( xhci, "XHCI %s slot %d ctx %d could not configure: %s\n",
+		       xhci->name, slot->id, endpoint->ctx, strerror ( rc ) );
 		return rc;
+	}
 
 	DBGC2 ( xhci, "XHCI %s slot %d ctx %d configured\n",
 		xhci->name, slot->id, endpoint->ctx );
@@ -2124,7 +2232,7 @@ xhci_deconfigure_endpoint_input ( struct xhci_device *xhci __unused,
 
 	/* Populate slot context */
 	slot_ctx = ( input + xhci_input_context_offset ( xhci, XHCI_CTX_SLOT ));
-	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1 ),
+	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1U ),
 							0, 0, 0 ) );
 }
 
@@ -2144,8 +2252,12 @@ static inline int xhci_deconfigure_endpoint ( struct xhci_device *xhci,
 	/* Deconfigure endpoint */
 	if ( ( rc = xhci_context ( xhci, slot, endpoint,
 				   XHCI_TRB_CONFIGURE_ENDPOINT,
-				   xhci_deconfigure_endpoint_input ) ) != 0 )
+				   xhci_deconfigure_endpoint_input ) ) != 0 ) {
+		DBGC ( xhci, "XHCI %s slot %d ctx %d could not deconfigure: "
+		       "%s\n", xhci->name, slot->id, endpoint->ctx,
+		       strerror ( rc ) );
 		return rc;
+	}
 
 	DBGC2 ( xhci, "XHCI %s slot %d ctx %d deconfigured\n",
 		xhci->name, slot->id, endpoint->ctx );
@@ -2175,7 +2287,7 @@ static void xhci_evaluate_context_input ( struct xhci_device *xhci,
 
 	/* Populate slot context */
 	slot_ctx = ( input + xhci_input_context_offset ( xhci, XHCI_CTX_SLOT ));
-	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1 ),
+	slot_ctx->info = cpu_to_le32 ( XHCI_SLOT_INFO ( ( XHCI_CTX_END - 1U ),
 							0, 0, 0 ) );
 
 	/* Populate endpoint context */
@@ -2199,8 +2311,12 @@ static inline int xhci_evaluate_context ( struct xhci_device *xhci,
 	/* Configure endpoint */
 	if ( ( rc = xhci_context ( xhci, slot, endpoint,
 				   XHCI_TRB_EVALUATE_CONTEXT,
-				   xhci_evaluate_context_input ) ) != 0 )
+				   xhci_evaluate_context_input ) ) != 0 ) {
+		DBGC ( xhci, "XHCI %s slot %d ctx %d could not (re-)evaluate: "
+		       "%s\n", xhci->name, slot->id, endpoint->ctx,
+		       strerror ( rc ) );
 		return rc;
+	}
 
 	DBGC2 ( xhci, "XHCI %s slot %d ctx %d (re-)evaluated\n",
 		xhci->name, slot->id, endpoint->ctx );
@@ -2290,6 +2406,7 @@ xhci_set_tr_dequeue_pointer ( struct xhci_device *xhci,
 	unsigned int mask;
 	unsigned int index;
 	unsigned int dcs;
+	physaddr_t addr;
 	int rc;
 
 	/* Construct command */
@@ -2298,8 +2415,8 @@ xhci_set_tr_dequeue_pointer ( struct xhci_device *xhci,
 	mask = ring->mask;
 	dcs = ( ( ~( cons >> ring->shift ) ) & XHCI_EP_DCS );
 	index = ( cons & mask );
-	dequeue->dequeue =
-		cpu_to_le64 ( virt_to_phys ( &ring->trb[index] ) | dcs );
+	addr = dma ( &ring->map, &ring->trb[index] );
+	dequeue->dequeue = cpu_to_le64 ( addr | dcs );
 	dequeue->slot = slot->id;
 	dequeue->endpoint = endpoint->ctx;
 	dequeue->type = XHCI_TRB_SET_TR_DEQUEUE_POINTER;
@@ -2418,6 +2535,7 @@ static void xhci_endpoint_close ( struct usb_endpoint *ep ) {
 	/* Cancel any incomplete transfers */
 	while ( xhci_ring_fill ( &endpoint->ring ) ) {
 		iobuf = xhci_dequeue_multi ( &endpoint->ring );
+		iob_unmap ( iobuf );
 		usb_complete_err ( ep, iobuf, -ECANCELED );
 	}
 
@@ -2484,6 +2602,7 @@ static int xhci_endpoint_mtu ( struct usb_endpoint *ep ) {
 static int xhci_endpoint_message ( struct usb_endpoint *ep,
 				   struct io_buffer *iobuf ) {
 	struct xhci_endpoint *endpoint = usb_endpoint_get_hostdata ( ep );
+	struct xhci_device *xhci = endpoint->xhci;
 	struct usb_setup_packet *packet;
 	unsigned int input;
 	size_t len;
@@ -2513,10 +2632,15 @@ static int xhci_endpoint_message ( struct usb_endpoint *ep,
 	if ( len )
 		setup->direction = ( input ? XHCI_SETUP_IN : XHCI_SETUP_OUT );
 
+	/* Map I/O buffer */
+	if ( ( rc = iob_map ( iobuf, xhci->dma, len,
+			      ( input ? DMA_RX : DMA_TX ) ) ) != 0 )
+		goto err_map;
+
 	/* Construct data stage TRB, if applicable */
 	if ( len ) {
 		data = &(trb++)->data;
-		data->data = cpu_to_le64 ( virt_to_phys ( iobuf->data ) );
+		data->data = cpu_to_le64 ( iob_dma ( iobuf ) );
 		data->len = cpu_to_le32 ( len );
 		data->type = XHCI_TRB_DATA;
 		data->direction = ( input ? XHCI_DATA_IN : XHCI_DATA_OUT );
@@ -2532,13 +2656,18 @@ static int xhci_endpoint_message ( struct usb_endpoint *ep,
 	/* Enqueue TRBs */
 	if ( ( rc = xhci_enqueue_multi ( &endpoint->ring, iobuf, trbs,
 					 ( trb - trbs ) ) ) != 0 )
-		return rc;
+		goto err_enqueue;
 
 	/* Ring the doorbell */
 	xhci_doorbell ( &endpoint->ring );
 
 	profile_stop ( &xhci_message_profiler );
 	return 0;
+
+ err_enqueue:
+	iob_unmap ( iobuf );
+ err_map:
+	return rc;
 }
 
 /**
@@ -2572,18 +2701,26 @@ static unsigned int xhci_endpoint_count ( size_t len, int zlp ) {
 static int xhci_endpoint_stream ( struct usb_endpoint *ep,
 				  struct io_buffer *iobuf, int zlp ) {
 	struct xhci_endpoint *endpoint = usb_endpoint_get_hostdata ( ep );
-	void *data = iobuf->data;
+	struct xhci_device *xhci = endpoint->xhci;
 	size_t len = iob_len ( iobuf );
 	unsigned int count = xhci_endpoint_count ( len, zlp );
 	union xhci_trb trbs[count];
 	union xhci_trb *trb = trbs;
 	struct xhci_trb_normal *normal;
+	physaddr_t data;
 	unsigned int i;
 	size_t trb_len;
 	int rc;
 
 	/* Profile stream transfers */
 	profile_start ( &xhci_stream_profiler );
+
+	/* Map I/O buffer */
+	if ( ( rc = iob_map ( iobuf, xhci->dma, len,
+			      ( ( ep->address & USB_DIR_IN ) ?
+				DMA_RX : DMA_TX ) ) ) != 0 )
+		goto err_map;
+	data = iob_dma ( iobuf );
 
 	/* Construct normal TRBs */
 	memset ( &trbs, 0, sizeof ( trbs ) );
@@ -2596,7 +2733,7 @@ static int xhci_endpoint_stream ( struct usb_endpoint *ep,
 
 		/* Construct normal TRB */
 		normal = &trb->normal;
-		normal->data = cpu_to_le64 ( virt_to_phys ( data ) );
+		normal->data = cpu_to_le64 ( data );
 		normal->len = cpu_to_le32 ( trb_len );
 		normal->type = XHCI_TRB_NORMAL;
 		normal->flags = XHCI_TRB_CH;
@@ -2617,13 +2754,18 @@ static int xhci_endpoint_stream ( struct usb_endpoint *ep,
 	/* Enqueue TRBs */
 	if ( ( rc = xhci_enqueue_multi ( &endpoint->ring, iobuf, trbs,
 					 count ) ) != 0 )
-		return rc;
+		goto err_enqueue;
 
 	/* Ring the doorbell */
 	xhci_doorbell ( &endpoint->ring );
 
 	profile_stop ( &xhci_stream_profiler );
 	return 0;
+
+ err_enqueue:
+	iob_unmap ( iobuf );
+ err_map:
+	return rc;
 }
 
 /******************************************************************************
@@ -2641,6 +2783,7 @@ static int xhci_endpoint_stream ( struct usb_endpoint *ep,
  */
 static int xhci_device_open ( struct usb_device *usb ) {
 	struct xhci_device *xhci = usb_bus_get_hostdata ( usb->port->hub->bus );
+	struct usb_port *root_port = usb_root_hub_port ( usb );
 	struct usb_port *tt = usb_transaction_translator ( usb );
 	struct xhci_slot *slot;
 	struct xhci_slot *tt_slot;
@@ -2650,7 +2793,7 @@ static int xhci_device_open ( struct usb_device *usb ) {
 	int rc;
 
 	/* Determine applicable slot type */
-	type = xhci_port_slot_type ( xhci, usb->port->address );
+	type = xhci_port_slot_type ( xhci, root_port->address );
 	if ( type < 0 ) {
 		rc = type;
 		DBGC ( xhci, "XHCI %s-%d has no slot type\n",
@@ -2686,7 +2829,8 @@ static int xhci_device_open ( struct usb_device *usb ) {
 
 	/* Allocate a device context */
 	len = xhci_device_context_offset ( xhci, XHCI_CTX_END );
-	slot->context = malloc_dma ( len, xhci_align ( len ) );
+	slot->context = dma_alloc ( xhci->dma, &slot->map, len,
+				    xhci_align ( len ) );
 	if ( ! slot->context ) {
 		rc = -ENOMEM;
 		goto err_alloc_context;
@@ -2694,16 +2838,17 @@ static int xhci_device_open ( struct usb_device *usb ) {
 	memset ( slot->context, 0, len );
 
 	/* Set device context base address */
-	assert ( xhci->dcbaa[id] == 0 );
-	xhci->dcbaa[id] = cpu_to_le64 ( virt_to_phys ( slot->context ) );
+	assert ( xhci->dcbaa.context[id] == 0 );
+	xhci->dcbaa.context[id] = cpu_to_le64 ( dma ( &slot->map,
+						      slot->context ) );
 
 	DBGC2 ( xhci, "XHCI %s slot %d device context [%08lx,%08lx) for %s\n",
 		xhci->name, slot->id, virt_to_phys ( slot->context ),
 		( virt_to_phys ( slot->context ) + len ), usb->name );
 	return 0;
 
-	xhci->dcbaa[id] = 0;
-	free_dma ( slot->context, len );
+	xhci->dcbaa.context[id] = 0;
+	dma_free ( &slot->map, slot->context, len );
  err_alloc_context:
 	xhci->slot[id] = NULL;
 	free ( slot );
@@ -2743,8 +2888,8 @@ static void xhci_device_close ( struct usb_device *usb ) {
 
 	/* Free slot */
 	if ( slot->context ) {
-		free_dma ( slot->context, len );
-		xhci->dcbaa[id] = 0;
+		dma_free ( &slot->map, slot->context, len );
+		xhci->dcbaa.context[id] = 0;
 	}
 	xhci->slot[id] = NULL;
 	free ( slot );
@@ -2937,8 +3082,7 @@ static void xhci_hub_close ( struct usb_hub *hub __unused ) {
  * @ret rc		Return status code
  */
 static int xhci_root_open ( struct usb_hub *hub ) {
-	struct usb_bus *bus = hub->bus;
-	struct xhci_device *xhci = usb_bus_get_hostdata ( bus );
+	struct xhci_device *xhci = usb_hub_get_drvdata ( hub );
 	struct usb_port *port;
 	uint32_t portsc;
 	unsigned int i;
@@ -2975,9 +3119,6 @@ static int xhci_root_open ( struct usb_hub *hub ) {
 	 */
 	mdelay ( XHCI_LINK_STATE_DELAY_MS );
 
-	/* Record hub driver private data */
-	usb_hub_set_drvdata ( hub, xhci );
-
 	return 0;
 }
 
@@ -2986,10 +3127,9 @@ static int xhci_root_open ( struct usb_hub *hub ) {
  *
  * @v hub		USB hub
  */
-static void xhci_root_close ( struct usb_hub *hub ) {
+static void xhci_root_close ( struct usb_hub *hub __unused ) {
 
-	/* Clear hub driver private data */
-	usb_hub_set_drvdata ( hub, NULL );
+	/* Nothing to do */
 }
 
 /**
@@ -3043,6 +3183,19 @@ static int xhci_root_disable ( struct usb_hub *hub, struct usb_port *port ) {
 	portsc &= XHCI_PORTSC_PRESERVE;
 	portsc |= XHCI_PORTSC_PED;
 	writel ( portsc, xhci->op + XHCI_OP_PORTSC ( port->address ) );
+
+	/* Allow time for link state to stabilise */
+	mdelay ( XHCI_LINK_STATE_DELAY_MS );
+
+	/* Set link state to RxDetect for USB3 ports */
+	if ( port->protocol >= USB_PROTO_3_0 ) {
+		portsc &= XHCI_PORTSC_PRESERVE;
+		portsc |= ( XHCI_PORTSC_PLS_RXDETECT | XHCI_PORTSC_LWS );
+		writel ( portsc, xhci->op + XHCI_OP_PORTSC ( port->address ) );
+	}
+
+	/* Allow time for link state to stabilise */
+	mdelay ( XHCI_LINK_STATE_DELAY_MS );
 
 	return 0;
 }
@@ -3124,7 +3277,7 @@ static int xhci_root_clear_tt ( struct usb_hub *hub, struct usb_port *port,
 
 /******************************************************************************
  *
- * PCI interface
+ * Hardware-independent interface
  *
  ******************************************************************************
  */
@@ -3162,6 +3315,75 @@ static struct usb_host_operations xhci_operations = {
 		.clear_tt = xhci_root_clear_tt,
 	},
 };
+
+/**
+ * Register xHCI controller
+ *
+ * @v xhci		xHCI device
+ * @ret rc		Return status code
+ */
+int xhci_register ( struct xhci_device *xhci ) {
+	struct usb_port *port;
+	unsigned int i;
+	int rc;
+
+	/* Reset device */
+	if ( ( rc = xhci_reset ( xhci ) ) != 0 )
+		goto err_reset;
+
+	/* Allocate USB bus */
+	xhci->bus = alloc_usb_bus ( xhci->dev, xhci->ports, XHCI_MTU,
+				    &xhci_operations );
+	if ( ! xhci->bus ) {
+		rc = -ENOMEM;
+		goto err_alloc_bus;
+	}
+	usb_bus_set_hostdata ( xhci->bus, xhci );
+	usb_hub_set_drvdata ( xhci->bus->hub, xhci );
+
+	/* Set port protocols */
+	for ( i = 1 ; i <= xhci->ports ; i++ ) {
+		port = usb_port ( xhci->bus->hub, i );
+		port->protocol = xhci_port_protocol ( xhci, i );
+	}
+
+	/* Register USB bus */
+	if ( ( rc = register_usb_bus ( xhci->bus ) ) != 0 )
+		goto err_register;
+
+	return 0;
+
+	unregister_usb_bus ( xhci->bus );
+ err_register:
+	free_usb_bus ( xhci->bus );
+ err_alloc_bus:
+	xhci_reset ( xhci );
+ err_reset:
+	return rc;
+}
+
+/**
+ * Unregister xHCI controller
+ *
+ * @v xhci		xHCI device
+ */
+void xhci_unregister ( struct xhci_device *xhci ) {
+	struct usb_bus *bus = xhci->bus;
+
+	/* Unregister and free USB bus */
+	unregister_usb_bus ( bus );
+	free_usb_bus ( bus );
+
+	/* Reset device */
+	xhci_reset ( xhci );
+}
+
+/******************************************************************************
+ *
+ * PCI interface
+ *
+ ******************************************************************************
+ */
 
 /**
  * Fix Intel PCH-specific quirks
@@ -3225,10 +3447,8 @@ static void xhci_pch_undo ( struct xhci_device *xhci, struct pci_device *pci ) {
  */
 static int xhci_probe ( struct pci_device *pci ) {
 	struct xhci_device *xhci;
-	struct usb_port *port;
 	unsigned long bar_start;
 	size_t bar_size;
-	unsigned int i;
 	int rc;
 
 	/* Allocate and initialise structure */
@@ -3237,7 +3457,8 @@ static int xhci_probe ( struct pci_device *pci ) {
 		rc = -ENOMEM;
 		goto err_alloc;
 	}
-	xhci->name = pci->dev.name;
+	xhci->dev = &pci->dev;
+	xhci->dma = &pci->dma;
 	xhci->quirks = pci->id->driver_data;
 
 	/* Fix up PCI device */
@@ -3246,14 +3467,14 @@ static int xhci_probe ( struct pci_device *pci ) {
 	/* Map registers */
 	bar_start = pci_bar_start ( pci, XHCI_BAR );
 	bar_size = pci_bar_size ( pci, XHCI_BAR );
-	xhci->regs = ioremap ( bar_start, bar_size );
+	xhci->regs = pci_ioremap ( pci, bar_start, bar_size );
 	if ( ! xhci->regs ) {
 		rc = -ENODEV;
 		goto err_ioremap;
 	}
 
 	/* Initialise xHCI device */
-	xhci_init ( xhci, xhci->regs );
+	xhci_init ( xhci );
 
 	/* Initialise USB legacy support and claim ownership */
 	xhci_legacy_init ( xhci );
@@ -3263,39 +3484,15 @@ static int xhci_probe ( struct pci_device *pci ) {
 	if ( xhci->quirks & XHCI_PCH )
 		xhci_pch_fix ( xhci, pci );
 
-	/* Reset device */
-	if ( ( rc = xhci_reset ( xhci ) ) != 0 )
-		goto err_reset;
-
-	/* Allocate USB bus */
-	xhci->bus = alloc_usb_bus ( &pci->dev, xhci->ports, XHCI_MTU,
-				    &xhci_operations );
-	if ( ! xhci->bus ) {
-		rc = -ENOMEM;
-		goto err_alloc_bus;
-	}
-	usb_bus_set_hostdata ( xhci->bus, xhci );
-	usb_hub_set_drvdata ( xhci->bus->hub, xhci );
-
-	/* Set port protocols */
-	for ( i = 1 ; i <= xhci->ports ; i++ ) {
-		port = usb_port ( xhci->bus->hub, i );
-		port->protocol = xhci_port_protocol ( xhci, i );
-	}
-
-	/* Register USB bus */
-	if ( ( rc = register_usb_bus ( xhci->bus ) ) != 0 )
+	/* Register xHCI device */
+	if ( ( rc = xhci_register ( xhci ) ) != 0 )
 		goto err_register;
 
 	pci_set_drvdata ( pci, xhci );
 	return 0;
 
-	unregister_usb_bus ( xhci->bus );
+	xhci_unregister ( xhci );
  err_register:
-	free_usb_bus ( xhci->bus );
- err_alloc_bus:
-	xhci_reset ( xhci );
- err_reset:
 	if ( xhci->quirks & XHCI_PCH )
 		xhci_pch_undo ( xhci, pci );
 	xhci_legacy_release ( xhci );
@@ -3313,15 +3510,34 @@ static int xhci_probe ( struct pci_device *pci ) {
  */
 static void xhci_remove ( struct pci_device *pci ) {
 	struct xhci_device *xhci = pci_get_drvdata ( pci );
-	struct usb_bus *bus = xhci->bus;
+	uint16_t command;
 
-	unregister_usb_bus ( bus );
-	free_usb_bus ( bus );
-	xhci_reset ( xhci );
+	/* Some systems are observed to disable bus mastering on
+	 * Thunderbolt controllers before we get a chance to shut
+	 * down.  Detect this and avoid attempting any DMA operations,
+	 * which are guaranteed to fail and may end up spuriously
+	 * completing after the operating system kernel starts up.
+	 */
+	pci_read_config_word ( pci, PCI_COMMAND, &command );
+	if ( ! ( command & PCI_COMMAND_MASTER ) ) {
+		DBGC ( xhci, "XHCI %s DMA was disabled\n", xhci->name );
+		xhci_fail ( xhci );
+	}
+
+	/* Unregister xHCI controller */
+	xhci_unregister ( xhci );
+
+	/* Undo any PCH-specific fixes */
 	if ( xhci->quirks & XHCI_PCH )
 		xhci_pch_undo ( xhci, pci );
+
+	/* Release ownership back to BIOS */
 	xhci_legacy_release ( xhci );
+
+	/* Unmap registers */
 	iounmap ( xhci->regs );
+
+	/* Free device */
 	free ( xhci );
 }
 
@@ -3356,5 +3572,6 @@ static void xhci_shutdown ( int booting ) {
 
 /** Startup/shutdown function */
 struct startup_fn xhci_startup __startup_fn ( STARTUP_LATE ) = {
+	.name = "xhci",
 	.shutdown = xhci_shutdown,
 };

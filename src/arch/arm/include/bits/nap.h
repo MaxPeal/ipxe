@@ -8,7 +8,14 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
-#include <ipxe/efi/efiarm_nap.h>
+/**
+ * Sleep until next CPU interrupt
+ *
+ */
+static inline __attribute__ (( always_inline )) void cpu_halt ( void ) {
+	__asm__ __volatile__ ( "wfi" );
+}
 
-#endif /* _BITS_MAP_H */
+#endif /* _BITS_NAP_H */

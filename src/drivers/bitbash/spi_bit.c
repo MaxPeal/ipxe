@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stddef.h>
 #include <stdint.h>
@@ -233,7 +234,7 @@ static int spi_bit_rw ( struct spi_bus *bus, struct spi_device *device,
  * @v spibit		SPI bit-bashing interface
  */
 void init_spi_bit_basher ( struct spi_bit_basher *spibit ) {
-	assert ( &spibit->basher.op->read != NULL );
-	assert ( &spibit->basher.op->write != NULL );
+	assert ( spibit->basher.op->read != NULL );
+	assert ( spibit->basher.op->write != NULL );
 	spibit->bus.rw = spi_bit_rw;
 }

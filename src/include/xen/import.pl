@@ -59,6 +59,10 @@ sub try_import_file {
     if ( /^\#include\s+[<\"](\S+)[>\"]/ ) {
       push @dependencies, catfile ( $subdir, $1 );
     }
+    # Patch "Unsupported architecture" line
+    if ( /^\#error\s+"Unsupported\sarchitecture"/ ) {
+      $_ = "#include <bits/xen.h>"
+    }
     # Write out line
     print $outfh "$_\n";
     # Apply FILE_LICENCE() immediately after include guard
@@ -66,7 +70,9 @@ sub try_import_file {
       if ( /^\#define\s+_+${maybe_guard}_H_*$/ ) {
 	die "Duplicate header guard detected in $infile\n" if $guard;
 	$guard = $maybe_guard;
-	print $outfh "\nFILE_LICENCE ( MIT );\n";
+	print $outfh "\n";
+	print $outfh "FILE_LICENCE ( MIT );\n";
+	print $outfh "FILE_SECBOOT ( PERMITTED );\n";
       }
       undef $maybe_guard;
     }

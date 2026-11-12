@@ -2,6 +2,7 @@
 #define _PCIDIRECT_H
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/io.h>
@@ -26,14 +27,29 @@ struct pci_device;
 extern void pcidirect_prepare ( struct pci_device *pci, int where );
 
 /**
- * Determine number of PCI buses within system
+ * Check if PCI bus probing is allowed
  *
- * @ret num_bus		Number of buses
+ * @v pci		PCI device
+ * @ret ok		Bus probing is allowed
  */
 static inline __always_inline int
-PCIAPI_INLINE ( direct, pci_num_bus ) ( void ) {
-	/* No way to work this out via Type 1 accesses */
-	return 0x100;
+PCIAPI_INLINE ( direct, pci_can_probe ) ( struct pci_device *pci __unused ) {
+	return 1;
+}
+
+/**
+ * Find next PCI bus:dev.fn address range in system
+ *
+ * @v busdevfn		Starting PCI bus:dev.fn address
+ * @v range		PCI bus:dev.fn address range to fill in
+ */
+static inline __always_inline void
+PCIAPI_INLINE ( direct, pci_discover ) ( uint32_t busdevfn __unused,
+					 struct pci_range *range ) {
+
+	/* Scan first bus and rely on bridge detection to find higher buses */
+	range->start = PCI_BUSDEVFN ( 0, 0, 0, 0 );
+	range->count = PCI_BUSDEVFN ( 0, 1, 0, 0 );
 }
 
 /**
@@ -136,6 +152,19 @@ PCIAPI_INLINE ( direct, pci_write_config_dword ) ( struct pci_device *pci,
 	pcidirect_prepare ( pci, where );
 	outl ( value, PCIDIRECT_CONFIG_DATA );
 	return 0;
+}
+
+/**
+ * Map PCI bus address as an I/O address
+ *
+ * @v bus_addr		PCI bus address
+ * @v len		Length of region
+ * @ret io_addr		I/O address, or NULL on error
+ */
+static inline __always_inline void *
+PCIAPI_INLINE ( direct, pci_ioremap ) ( struct pci_device *pci __unused,
+					unsigned long bus_addr, size_t len ) {
+	return ioremap ( bus_addr, len );
 }
 
 #endif /* _PCIDIRECT_H */

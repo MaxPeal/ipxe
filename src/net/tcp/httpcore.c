@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /**
  * @file
@@ -55,6 +56,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/params.h>
 #include <ipxe/profile.h>
 #include <ipxe/vsprintf.h>
+#include <ipxe/errortab.h>
+#include <ipxe/efi/efi_path.h>
 #include <ipxe/http.h>
 
 /* Disambiguate the various error causes */
@@ -87,7 +90,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 	__einfo_uniqify ( EINFO_EIO, 0x05, "HTTP 5xx Server Error" )
 #define ENOENT_404 __einfo_error ( EINFO_ENOENT_404 )
 #define EINFO_ENOENT_404 \
-	__einfo_uniqify ( EINFO_ENOENT, 0x01, "HTTP 404 Not Found" )
+	__einfo_uniqify ( EINFO_ENOENT, 0x01, "Not found" )
 #define ENOTSUP_CONNECTION __einfo_error ( EINFO_ENOTSUP_CONNECTION )
 #define EINFO_ENOTSUP_CONNECTION \
 	__einfo_uniqify ( EINFO_ENOTSUP, 0x01, "Unsupported connection header" )
@@ -104,11 +107,21 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 /** Retry delay used when we cannot understand the Retry-After header */
 #define HTTP_RETRY_SECONDS 5
 
+/** Idle connection watchdog timeout */
+#define HTTP_WATCHDOG_SECONDS 120
+
 /** Receive profiler */
 static struct profiler http_rx_profiler __profiler = { .name = "http.rx" };
 
 /** Data transfer profiler */
 static struct profiler http_xfer_profiler __profiler = { .name = "http.xfer" };
+
+/** Human-readable error messages */
+struct errortab http_errors[] __errortab = {
+	__einfo_errortab ( EINFO_ENOENT_404 ),
+	__einfo_errortab ( EINFO_EIO_4XX ),
+	__einfo_errortab ( EINFO_EIO_5XX ),
+};
 
 static struct http_state http_request;
 static struct http_state http_headers;
@@ -123,19 +136,46 @@ static struct http_transfer_encoding http_transfer_identity;
  */
 
 /** HTTP HEAD method */
-struct http_method http_head = {
+struct http_method http_head __http_method = {
 	.name = "HEAD",
+	.flags = 0,
 };
 
 /** HTTP GET method */
-struct http_method http_get = {
+struct http_method http_get __http_method = {
 	.name = "GET",
+	.flags = 0,
 };
 
 /** HTTP POST method */
-struct http_method http_post = {
+struct http_method http_post __http_method = {
 	.name = "POST",
+	.flags = HTTP_FL_REQ_BODY,
 };
+
+/** HTTP PUT method */
+struct http_method http_put __http_method = {
+	.name = "PUT",
+	.flags = HTTP_FL_REQ_BODY,
+};
+
+/**
+ * Identify HTTP method
+ *
+ * @v name		Method name
+ * @ret method		HTTP method, or NULL if not known
+ */
+static struct http_method * http_method ( const char *name ) {
+	struct http_method *method;
+
+	/* Identify method */
+	for_each_table_entry ( method, HTTP_METHODS ) {
+		if ( strcasecmp ( name, method->name ) == 0 )
+			return method;
+	}
+
+	return NULL;
+}
 
 /******************************************************************************
  *
@@ -272,8 +312,9 @@ static void http_close ( struct http_transaction *http, int rc ) {
 	/* Stop process */
 	process_del ( &http->process );
 
-	/* Stop timer */
-	stop_timer ( &http->timer );
+	/* Stop timers */
+	stop_timer ( &http->retry );
+	stop_timer ( &http->watchdog );
 
 	/* Close all interfaces */
 	intfs_shutdown ( rc, &http->conn, &http->transfer, &http->content,
@@ -290,6 +331,18 @@ static void http_close_error ( struct http_transaction *http, int rc ) {
 
 	/* Treat any close as an error */
 	http_close ( http, ( rc ? rc : -EPIPE ) );
+}
+
+/**
+ * Hold off HTTP idle connection watchdog timer
+ *
+ * @v http		HTTP transaction
+ */
+static inline void http_watchdog ( struct http_transaction *http ) {
+
+	/* (Re)start watchdog timer */
+	start_timer_fixed ( &http->watchdog,
+			    ( HTTP_WATCHDOG_SECONDS * TICKS_PER_SEC ) );
 }
 
 /**
@@ -313,6 +366,9 @@ static void http_reopen ( struct http_transaction *http ) {
 	/* Reset state */
 	http->state = &http_request;
 
+	/* Restart idle connection watchdog timer */
+	http_watchdog ( http );
+
 	/* Reschedule transmission process */
 	process_add ( &http->process );
 
@@ -323,17 +379,34 @@ static void http_reopen ( struct http_transaction *http ) {
 }
 
 /**
- * Handle retry timer expiry
+ * Handle connection retry timer expiry
  *
- * @v timer		Retry timer
+ * @v retry		Retry timer
  * @v over		Failure indicator
  */
-static void http_expired ( struct retry_timer *timer, int over __unused ) {
+static void http_retry_expired ( struct retry_timer *retry,
+				 int over __unused ) {
 	struct http_transaction *http =
-		container_of ( timer, struct http_transaction, timer );
+		container_of ( retry, struct http_transaction, retry );
 
 	/* Reopen connection */
 	http_reopen ( http );
+}
+
+/**
+ * Handle idle connection watchdog timer expiry
+ *
+ * @v watchdog		Idle connection watchdog timer
+ * @v over		Failure indicator
+ */
+static void http_watchdog_expired ( struct retry_timer *watchdog,
+				    int over __unused ) {
+	struct http_transaction *http =
+		container_of ( watchdog, struct http_transaction, watchdog );
+
+	/* Abort connection */
+	DBGC ( http, "HTTP %p aborting idle connection\n", http );
+	http_close ( http, -ETIMEDOUT );
 }
 
 /**
@@ -451,6 +524,9 @@ static int http_content_deliver ( struct http_transaction *http,
 		return 0;
 	}
 
+	/* Hold off idle connection watchdog timer */
+	http_watchdog ( http );
+
 	/* Deliver to data transfer interface */
 	profile_start ( &http_xfer_profiler );
 	if ( ( rc = xfer_deliver ( &http->xfer, iob_disown ( iobuf ),
@@ -494,7 +570,7 @@ http_content_buffer ( struct http_transaction *http ) {
 __weak int http_block_read ( struct http_transaction *http __unused,
 			     struct interface *data __unused,
 			     uint64_t lba __unused, unsigned int count __unused,
-			     userptr_t buffer __unused, size_t len __unused ) {
+			     void *buffer __unused, size_t len __unused ) {
 
 	return -ENOTSUP;
 }
@@ -512,6 +588,18 @@ __weak int http_block_read_capacity ( struct http_transaction *http __unused,
 	return -ENOTSUP;
 }
 
+/**
+ * Describe as an EFI device path
+ *
+ * @v http		HTTP transaction
+ * @ret path		EFI device path, or NULL on error
+ */
+static EFI_DEVICE_PATH_PROTOCOL *
+http_efi_describe ( struct http_transaction *http ) {
+
+	return efi_uri_path ( http->uri );
+}
+
 /** HTTP data transfer interface operations */
 static struct interface_operation http_xfer_operations[] = {
 	INTF_OP ( block_read, struct http_transaction *, http_block_read ),
@@ -519,6 +607,8 @@ static struct interface_operation http_xfer_operations[] = {
 		  http_block_read_capacity ),
 	INTF_OP ( xfer_window_changed, struct http_transaction *, http_step ),
 	INTF_OP ( intf_close, struct http_transaction *, http_close ),
+	EFI_INTF_OP ( efi_describe, struct http_transaction *,
+		      http_efi_describe ),
 };
 
 /** HTTP data transfer interface descriptor */
@@ -592,8 +682,8 @@ int http_open ( struct interface *xfer, struct http_method *method,
 
 	/* Calculate request URI length */
 	memset ( &request_uri, 0, sizeof ( request_uri ) );
-	request_uri.path = ( uri->path ? uri->path : "/" );
-	request_uri.query = uri->query;
+	request_uri.epath = ( uri->epath ? uri->epath : "/" );
+	request_uri.equery = uri->equery;
 	request_uri_len =
 		( format_uri ( &request_uri, NULL, 0 ) + 1 /* NUL */);
 
@@ -626,7 +716,8 @@ int http_open ( struct interface *xfer, struct http_method *method,
 	intf_init ( &http->conn, &http_conn_desc, &http->refcnt );
 	intf_plug_plug ( &http->transfer, &http->content );
 	process_init ( &http->process, &http_process_desc, &http->refcnt );
-	timer_init ( &http->timer, http_expired, &http->refcnt );
+	timer_init ( &http->retry, http_retry_expired, &http->refcnt );
+	timer_init ( &http->watchdog, http_watchdog_expired, &http->refcnt );
 	http->uri = uri_get ( uri );
 	http->request.method = method;
 	http->request.uri = request_uri_string;
@@ -651,6 +742,9 @@ int http_open ( struct interface *xfer, struct http_method *method,
 		       http, strerror ( rc ) );
 		goto err_connect;
 	}
+
+	/* Start watchdog timer */
+	http_watchdog ( http );
 
 	/* Attach to parent interface, mortalise self, and return */
 	intf_plug_plug ( &http->xfer, xfer );
@@ -771,11 +865,24 @@ static int http_transfer_complete ( struct http_transaction *http ) {
 	http->len = 0;
 	assert ( http->remaining == 0 );
 
+	/* Retry immediately if applicable.  We cannot rely on an
+	 * immediate timer expiry, since certain Microsoft-designed
+	 * HTTP extensions such as NTLM break the fundamentally
+	 * stateless nature of HTTP and rely on the same connection
+	 * being reused for authentication.  See RFC7230 section 2.3
+	 * for further details.
+	 */
+	if ( ! http->response.retry_after ) {
+		http_reopen ( http );
+		return 0;
+	}
+
 	/* Start timer to initiate retry */
 	DBGC2 ( http, "HTTP %p retrying after %d seconds\n",
 		http, http->response.retry_after );
-	start_timer_fixed ( &http->timer,
+	start_timer_fixed ( &http->retry,
 			    ( http->response.retry_after * TICKS_PER_SEC ) );
+	stop_timer ( &http->watchdog );
 	return 0;
 }
 
@@ -796,7 +903,9 @@ static int http_transfer_complete ( struct http_transaction *http ) {
  */
 static int http_format_headers ( struct http_transaction *http, char *buf,
 				 size_t len ) {
+	struct parameters *params = http->uri->params;
 	struct http_request_header *header;
+	struct parameter *param;
 	size_t used;
 	size_t remaining;
 	char *line;
@@ -810,7 +919,7 @@ static int http_format_headers ( struct http_transaction *http, char *buf,
 		DBGC2 ( http, "HTTP %p TX %s\n", http, buf );
 	used += ssnprintf ( ( buf + used ), ( len - used ), "\r\n" );
 
-	/* Construct all headers */
+	/* Construct all fixed headers */
 	for_each_table_entry ( header, HTTP_REQUEST_HEADERS ) {
 
 		/* Determine header value length */
@@ -833,6 +942,27 @@ static int http_format_headers ( struct http_transaction *http, char *buf,
 		if ( used < len )
 			DBGC2 ( http, "HTTP %p TX %s\n", http, line );
 		used += ssnprintf ( ( buf + used ), ( len - used ), "\r\n" );
+	}
+
+	/* Construct parameter headers, if any */
+	if ( params ) {
+
+		/* Construct all parameter headers */
+		for_each_param ( param, params ) {
+
+			/* Skip non-header parameters */
+			if ( ! ( param->flags & PARAMETER_HEADER ) )
+				continue;
+
+			/* Add parameter */
+			used += ssnprintf ( ( buf + used ), ( len - used ),
+					    "%s: %s\r\n", param->key,
+					    param->value );
+			if ( used < len ) {
+				DBGC2 ( http, "HTTP %p TX %s: %s\n",
+					http, param->key, param->value );
+			}
+		}
 	}
 
 	/* Construct terminating newline */
@@ -969,11 +1099,15 @@ static int http_format_content_length ( struct http_transaction *http,
 					char *buf, size_t len ) {
 
 	/* Construct content length, if applicable */
-	if ( http->request.content.len ) {
+	if ( http->request.method->flags & HTTP_FL_REQ_BODY ) {
 		return snprintf ( buf, len, "%zd", http->request.content.len );
-	} else {
+	} else if ( http->request.content.len == 0 ) {
 		return 0;
 	}
+
+	DBGC ( http, "HTTP %p cannot %s with a request body\n",
+	       http, http->request.method->name );
+	return -ENOTSUP;
 }
 
 /** HTTP "Content-Length" header */
@@ -1036,7 +1170,8 @@ static int http_tx_request ( struct http_transaction *http ) {
 	}
 
 	/* Allocate I/O buffer */
-	iobuf = alloc_iob ( len + 1 /* NUL */ + http->request.content.len );
+	iobuf = xfer_alloc_iob ( &http->conn, ( len + 1 /* NUL */ +
+						http->request.content.len ) );
 	if ( ! iobuf ) {
 		rc = -ENOMEM;
 		goto err_alloc;
@@ -1156,6 +1291,8 @@ static int http_parse_status ( struct http_transaction *http, char *line ) {
 		response_rc = -EIO_OTHER;
 	}
 	http->response.rc = response_rc;
+	if ( response_rc )
+		DBGC ( http, "HTTP %p status %s\n", http, status );
 
 	return 0;
 }
@@ -1679,8 +1816,11 @@ static int http_rx_chunk_len ( struct http_transaction *http,
  */
 static int http_rx_chunk_data ( struct http_transaction *http,
 				struct io_buffer **iobuf ) {
+	struct {
+		uint8_t cr;
+		uint8_t lf;
+	} __attribute__ (( packed )) *crlf;
 	struct io_buffer *payload;
-	uint8_t *crlf;
 	size_t len;
 	int rc;
 
@@ -1689,12 +1829,16 @@ static int http_rx_chunk_data ( struct http_transaction *http,
 	 * (which we would ignore anyway) and hence avoid
 	 * unnecessarily copying the data.
 	 */
-	if ( iob_len ( *iobuf ) == ( http->remaining + 2 /* CRLF */ ) ) {
-		crlf = ( (*iobuf)->data + http->remaining );
-		if ( ( crlf[0] == '\r' ) && ( crlf[1] == '\n' ) )
-			iob_unput ( (*iobuf), 2 /* CRLF */ );
-	}
 	len = iob_len ( *iobuf );
+	if ( ( len >= sizeof ( *crlf ) ) &&
+	     ( ( len - sizeof ( *crlf ) ) == http->remaining ) ) {
+		crlf = ( (*iobuf)->data + http->remaining );
+		if ( ( crlf->cr == '\r' ) && ( crlf->lf == '\n' ) ) {
+			iob_unput ( *iobuf, sizeof ( *crlf ) );
+			len -= sizeof ( *crlf );
+		}
+	}
+	assert ( len == iob_len ( *iobuf ) );
 
 	/* Use whole/partial buffer as applicable */
 	if ( len <= http->remaining ) {
@@ -1815,14 +1959,15 @@ static struct http_state http_trailers = {
  */
 
 /**
- * Construct HTTP parameter list
+ * Construct HTTP form parameter list
  *
  * @v params		Parameter list
  * @v buf		Buffer to contain HTTP POST parameters
  * @v len		Length of buffer
  * @ret len		Length of parameter list (excluding terminating NUL)
  */
-static size_t http_params ( struct parameters *params, char *buf, size_t len ) {
+static size_t http_form_params ( struct parameters *params, char *buf,
+				 size_t len ) {
 	struct parameter *param;
 	ssize_t remaining = len;
 	size_t frag_len;
@@ -1830,6 +1975,10 @@ static size_t http_params ( struct parameters *params, char *buf, size_t len ) {
 	/* Add each parameter in the form "key=value", joined with "&" */
 	len = 0;
 	for_each_param ( param, params ) {
+
+		/* Skip non-form parameters */
+		if ( ! ( param->flags & PARAMETER_FORM ) )
+			continue;
 
 		/* Add the "&", if applicable */
 		if ( len ) {
@@ -1868,62 +2017,6 @@ static size_t http_params ( struct parameters *params, char *buf, size_t len ) {
 }
 
 /**
- * Open HTTP transaction for simple GET URI
- *
- * @v xfer		Data transfer interface
- * @v uri		Request URI
- * @ret rc		Return status code
- */
-static int http_open_get_uri ( struct interface *xfer, struct uri *uri ) {
-
-	return http_open ( xfer, &http_get, uri, NULL, NULL );
-}
-
-/**
- * Open HTTP transaction for simple POST URI
- *
- * @v xfer		Data transfer interface
- * @v uri		Request URI
- * @ret rc		Return status code
- */
-static int http_open_post_uri ( struct interface *xfer, struct uri *uri ) {
-	struct parameters *params = uri->params;
-	struct http_request_content content;
-	void *data;
-	size_t len;
-	size_t check_len;
-	int rc;
-
-	/* Calculate length of parameter list */
-	len = http_params ( params, NULL, 0 );
-
-	/* Allocate temporary parameter list */
-	data = zalloc ( len + 1 /* NUL */ );
-	if ( ! data ) {
-		rc = -ENOMEM;
-		goto err_alloc;
-	}
-
-	/* Construct temporary parameter list */
-	check_len = http_params ( params, data, ( len + 1 /* NUL */ ) );
-	assert ( check_len == len );
-
-	/* Construct request content */
-	content.type = "application/x-www-form-urlencoded";
-	content.data = data;
-	content.len = len;
-
-	/* Open HTTP transaction */
-	if ( ( rc = http_open ( xfer, &http_post, uri, NULL, &content ) ) != 0 )
-		goto err_open;
-
- err_open:
-	free ( data );
- err_alloc:
-	return rc;
-}
-
-/**
  * Open HTTP transaction for simple URI
  *
  * @v xfer		Data transfer interface
@@ -1931,13 +2024,70 @@ static int http_open_post_uri ( struct interface *xfer, struct uri *uri ) {
  * @ret rc		Return status code
  */
 int http_open_uri ( struct interface *xfer, struct uri *uri ) {
+	struct parameters *params = uri->params;
+	struct http_request_content content;
+	struct http_method *method;
+	const char *type;
+	void *data;
+	size_t len;
+	size_t check_len;
+	int rc;
 
-	/* Open GET/POST URI as applicable */
-	if ( uri->params ) {
-		return http_open_post_uri ( xfer, uri );
+	/* Calculate length of form parameter list, if any */
+	len = ( params ? http_form_params ( params, NULL, 0 ) : 0 );
+
+	/* Use POST if and only if there are form parameters */
+	if ( len ) {
+
+		/* Use POST */
+		method = &http_post;
+		type = "application/x-www-form-urlencoded";
+
+		/* Allocate temporary form parameter list */
+		data = zalloc ( len + 1 /* NUL */ );
+		if ( ! data ) {
+			rc = -ENOMEM;
+			goto err_alloc;
+		}
+
+		/* Construct temporary form parameter list */
+		check_len = http_form_params ( params, data,
+					       ( len + 1 /* NUL */ ) );
+		assert ( check_len == len );
+
 	} else {
-		return http_open_get_uri ( xfer, uri );
+
+		/* Use GET */
+		method = &http_get;
+		type = NULL;
+		data = NULL;
 	}
+
+	/* Use explicitly requested method name if applicable */
+	if ( params && params->method ) {
+		method = http_method ( params->method );
+		if ( ! method ) {
+			DBGC ( uri, "HTTP unsupported method \"%s\"\n",
+			       params->method );
+			rc = -ENOTSUP;
+			goto err_method;
+		}
+	}
+
+	/* Construct request content */
+	content.type = type;
+	content.data = data;
+	content.len = len;
+
+	/* Open HTTP transaction */
+	if ( ( rc = http_open ( xfer, method, uri, NULL, &content ) ) != 0 )
+		goto err_open;
+
+ err_open:
+ err_method:
+	free ( data );
+ err_alloc:
+	return rc;
 }
 
 /* Drag in HTTP extensions */

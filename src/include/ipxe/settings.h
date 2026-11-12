@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/tables.h>
@@ -267,6 +268,14 @@ struct settings_applicator {
 struct builtin_setting {
 	/** Setting */
 	const struct setting *setting;
+	/**
+	 * Store setting value
+	 *
+	 * @v data		Setting data, or NULL to clear setting
+	 * @v len		Length of setting data
+	 * @ret rc		Return status code
+	 */
+	int ( * store ) ( const void *data, size_t len );
 	/** Fetch setting value
 	 *
 	 * @v data		Buffer to fill with setting data
@@ -426,6 +435,7 @@ extern const struct setting_type setting_type_hexhyp __setting_type;
 extern const struct setting_type setting_type_hexraw __setting_type;
 extern const struct setting_type setting_type_base64 __setting_type;
 extern const struct setting_type setting_type_uuid __setting_type;
+extern const struct setting_type setting_type_guid __setting_type;
 extern const struct setting_type setting_type_busdevfn __setting_type;
 extern const struct setting_type setting_type_dnssl __setting_type;
 
@@ -436,6 +446,8 @@ netmask_setting __setting ( SETTING_IP4, netmask );
 extern const struct setting
 gateway_setting __setting ( SETTING_IP4, gateway );
 extern const struct setting
+static_route_setting __setting ( SETTING_IP4, static_routes );
+extern const struct setting
 dns_setting __setting ( SETTING_IP4_EXTRA, dns );
 extern const struct setting
 ip6_setting __setting ( SETTING_IP6, ip6 );
@@ -443,6 +455,8 @@ extern const struct setting
 len6_setting __setting ( SETTING_IP6, len6 );
 extern const struct setting
 gateway6_setting __setting ( SETTING_IP6, gateway6 );
+extern const struct setting
+dns6_setting __setting ( SETTING_IP6_EXTRA, dns6 );
 extern const struct setting
 hostname_setting __setting ( SETTING_HOST, hostname );
 extern const struct setting
@@ -467,6 +481,8 @@ extern const struct setting
 mac_setting __setting ( SETTING_NETDEV, mac );
 extern const struct setting
 busid_setting __setting ( SETTING_NETDEV, busid );
+extern const struct setting
+linktype_setting __setting ( SETTING_NETDEV, linktype );
 extern const struct setting
 user_class_setting __setting ( SETTING_HOST_EXTRA, user-class );
 extern const struct setting

@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdio.h>
 #include <errno.h>
@@ -57,7 +58,7 @@ void certstat ( struct x509_certificate *cert ) {
 		printf ( " [PERMANENT]" );
 	if ( cert->flags & X509_FL_EXPLICIT )
 		printf ( " [EXPLICIT]" );
-	if ( x509_is_valid ( cert ) )
+	if ( x509_is_valid ( cert, NULL ) )
 		printf ( " [VALIDATED]" );
 	printf ( "\n" );
 }

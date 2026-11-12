@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <ipxe/interface.h>
@@ -81,9 +82,14 @@ struct interface null_intf = INTF_INIT ( null_intf_desc );
  * interface is updated to point to the new destination interface.
  */
 void intf_plug ( struct interface *intf, struct interface *dest ) {
+
+	if ( intf == &null_intf )
+		return;
+
 	DBGC ( INTF_COL ( intf ),
 	       "INTF " INTF_INTF_FMT " replug to " INTF_FMT "\n",
 	       INTF_INTF_DBG ( intf, intf->dest ), INTF_DBG ( dest ) );
+
 	intf_get ( dest );
 	intf_put ( intf->dest );
 	intf->dest = dest;
@@ -280,6 +286,7 @@ void intf_shutdown ( struct interface *intf, int rc ) {
 	intf_nullify ( intf );
 
 	/* Transfer destination to temporary interface */
+	intf_temp_init ( &tmp, intf );
 	tmp.dest = intf->dest;
 	intf->dest = &null_intf;
 
@@ -383,6 +390,23 @@ void intfs_restart ( int rc, ... ) {
 	va_start ( intfs, rc );
 	intfs_vrestart ( intfs, rc );
 	va_end ( intfs );
+}
+
+/**
+ * Insert a filter interface
+ *
+ * @v intf		Object interface
+ * @v upper		Upper end of filter
+ * @v lower		Lower end of filter
+ */
+void intf_insert ( struct interface *intf, struct interface *upper,
+		   struct interface *lower ) {
+	struct interface *dest = intf->dest;
+
+	intf_get ( dest );
+	intf_plug_plug ( intf, upper );
+	intf_plug_plug ( lower, dest );
+	intf_put ( dest );
 }
 
 /**

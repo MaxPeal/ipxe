@@ -13,11 +13,20 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/profile.h>
 #include <realmode.h>
 #include <pic8259.h>
+#include <ipxe/shell.h>
+#include <ipxe/cpuid.h>
 
 /*
  * This file provides functions for managing librm.
  *
  */
+
+/* Calling convention used by interrupt wrapper */
+#ifdef __x86_64__
+#define __intrcall
+#else
+#define __intrcall __attribute__ (( regparm ( 3 ) ))
+#endif
 
 /** The interrupt wrapper */
 extern char interrupt_wrapper[];
@@ -43,6 +52,12 @@ struct idtr64 idtr64 = {
 	.limit = ( sizeof ( idt64 ) - 1 ),
 };
 
+/** Startup IPI register state */
+struct i386_regs sipi_regs;
+
+/** Length of stack dump */
+#define STACK_DUMP_LEN 128
+
 /** Timer interrupt profiler */
 static struct profiler timer_irq_profiler __profiler = { .name = "irq.timer" };
 
@@ -50,35 +65,36 @@ static struct profiler timer_irq_profiler __profiler = { .name = "irq.timer" };
 static struct profiler other_irq_profiler __profiler = { .name = "irq.other" };
 
 /**
- * Allocate space on the real-mode stack and copy data there from a
- * user buffer
+ * Allocate space on the real-mode stack and copy data there
  *
- * @v data		User buffer
+ * @v data		Stack data
  * @v size		Size of stack data
  * @ret sp		New value of real-mode stack pointer
  */
-uint16_t copy_user_to_rm_stack ( userptr_t data, size_t size ) {
-	userptr_t rm_stack;
+uint16_t copy_to_rm_stack ( const void *data, size_t size ) {
+	void *rm_stack;
+
 	rm_sp -= size;
-	rm_stack = real_to_user ( rm_ss, rm_sp );
-	memcpy_user ( rm_stack, 0, data, 0, size );
+	rm_stack = real_to_virt ( rm_ss, rm_sp );
+	memcpy ( rm_stack, data, size );
 	return rm_sp;
-};
+}
 
 /**
- * Deallocate space on the real-mode stack, optionally copying back
- * data to a user buffer.
+ * Deallocate space on the real-mode stack, optionally copying back data
  *
- * @v data		User buffer
+ * @v data		Stack data buffer, or NULL
  * @v size		Size of stack data
  */
-void remove_user_from_rm_stack ( userptr_t data, size_t size ) {
+void remove_from_rm_stack ( void *data, size_t size ) {
+	const void *rm_stack;
+
 	if ( data ) {
-		userptr_t rm_stack = real_to_user ( rm_ss, rm_sp );
-		memcpy_user ( rm_stack, 0, data, 0, size );
+		rm_stack = real_to_virt ( rm_ss, rm_sp );
+		memcpy ( data, rm_stack, size );
 	}
 	rm_sp += size;
-};
+}
 
 /**
  * Set interrupt vector
@@ -114,7 +130,7 @@ void set_interrupt_vector ( unsigned int intr, void *vector ) {
  * Initialise interrupt descriptor table
  *
  */
-void init_idt ( void ) {
+__asmcall void init_idt ( void ) {
 	struct interrupt_vector *vec;
 	unsigned int intr;
 
@@ -160,13 +176,98 @@ static struct profiler * interrupt_profiler ( int intr ) {
 }
 
 /**
+ * Display interrupt stack dump (for debugging)
+ *
+ * @v intr		Interrupt number
+ * @v frame32		32-bit interrupt wrapper stack frame (or NULL)
+ * @v frame64		64-bit interrupt wrapper stack frame (or NULL)
+ */
+static __attribute__ (( unused )) void
+interrupt_dump ( int intr, struct interrupt_frame32 *frame32,
+		 struct interrupt_frame64 *frame64 ) {
+	unsigned long sp;
+	void *stack;
+
+	/* Do nothing unless debugging is enabled */
+	if ( ! DBG_LOG )
+		return;
+
+	/* Print register dump */
+	if ( ( sizeof ( physaddr_t ) <= sizeof ( uint32_t ) ) || frame32 ) {
+		sp = ( frame32->esp + sizeof ( *frame32 ) -
+		       offsetof ( typeof ( *frame32 ), esp ) );
+		DBGC ( &intr, "INT%d at %04x:%08x (stack %04x:%08lx):\n",
+		       intr, frame32->cs, frame32->eip, frame32->ss, sp );
+		DBGC ( &intr, "cs = %04x  ds = %04x  es = %04x  fs = %04x  "
+		       "gs = %04x  ss = %04x\n", frame32->cs, frame32->ds,
+		       frame32->es, frame32->fs, frame32->gs, frame32->ss );
+		DBGC ( &intr, "eax = %08x  ebx = %08x  ecx = %08x  "
+		       "edx = %08x  flg = %08x\n", frame32->eax, frame32->ebx,
+		       frame32->ecx, frame32->edx, frame32->eflags );
+		DBGC ( &intr, "esi = %08x  edi = %08x  ebp = %08x  "
+		       "esp = %08lx  eip = %08x\n", frame32->esi, frame32->edi,
+		       frame32->ebp, sp, frame32->eip );
+		stack = ( ( ( void * ) frame32 ) + sizeof ( *frame32 ) );
+	} else {
+		DBGC ( &intr, "INT%d at %04llx:%016llx (stack "
+		       "%04llx:%016llx):\n", intr,
+		       ( ( unsigned long long ) frame64->cs ),
+		       ( ( unsigned long long ) frame64->rip ),
+		       ( ( unsigned long long ) frame64->ss ),
+		       ( ( unsigned long long ) frame64->rsp ) );
+		DBGC ( &intr, "rax = %016llx  rbx = %016llx  rcx = %016llx\n",
+		       ( ( unsigned long long ) frame64->rax ),
+		       ( ( unsigned long long ) frame64->rbx ),
+		       ( ( unsigned long long ) frame64->rcx ) );
+		DBGC ( &intr, "rdx = %016llx  rsi = %016llx  rdi = %016llx\n",
+		       ( ( unsigned long long ) frame64->rdx ),
+		       ( ( unsigned long long ) frame64->rsi ),
+		       ( ( unsigned long long ) frame64->rdi ) );
+		DBGC ( &intr, "rbp = %016llx  rsp = %016llx  flg = %016llx\n",
+		       ( ( unsigned long long ) frame64->rbp ),
+		       ( ( unsigned long long ) frame64->rsp ),
+		       ( ( unsigned long long ) frame64->rflags ) );
+		DBGC ( &intr, "r8  = %016llx  r9  = %016llx  r10 = %016llx\n",
+		       ( ( unsigned long long ) frame64->r8 ),
+		       ( ( unsigned long long ) frame64->r9 ),
+		       ( ( unsigned long long ) frame64->r10 ) );
+		DBGC ( &intr, "r11 = %016llx  r12 = %016llx  r13 = %016llx\n",
+		       ( ( unsigned long long ) frame64->r11 ),
+		       ( ( unsigned long long ) frame64->r12 ),
+		       ( ( unsigned long long ) frame64->r13 ) );
+		DBGC ( &intr, "r14 = %016llx  r15 = %016llx\n",
+		       ( ( unsigned long long ) frame64->r14 ),
+		       ( ( unsigned long long ) frame64->r15 ) );
+		sp = frame64->rsp;
+		stack = phys_to_virt ( sp );
+	}
+
+	/* Print stack dump */
+	DBGC_HDA ( &intr, sp, stack, STACK_DUMP_LEN );
+}
+
+/**
  * Interrupt handler
  *
  * @v intr		Interrupt number
+ * @v frame32		32-bit interrupt wrapper stack frame (or NULL)
+ * @v frame64		64-bit interrupt wrapper stack frame (or NULL)
+ * @v frame		Interrupt wrapper stack frame
  */
-void __attribute__ (( regparm ( 1 ) )) interrupt ( int intr ) {
+__intrcall void interrupt ( int intr, struct interrupt_frame32 *frame32,
+			    struct interrupt_frame64 *frame64 ) {
 	struct profiler *profiler = interrupt_profiler ( intr );
 	uint32_t discard_eax;
+
+	/* Trap CPU exceptions if debugging is enabled.  Note that we
+	 * cannot treat INT8+ as exceptions, since we are not
+	 * permitted to rebase the PIC.
+	 */
+	if ( DBG_LOG && ( intr < IRQ_INT ( 0 ) ) ) {
+		interrupt_dump ( intr, frame32, frame64 );
+		DBG ( "CPU exception: dropping to emergency shell\n" );
+		shell();
+	}
 
 	/* Reissue interrupt in real mode */
 	profile_start ( profiler );
@@ -208,17 +309,14 @@ static void * ioremap_pages ( unsigned long bus_addr, size_t len ) {
 	/* Calculate number of pages required */
 	count = ( ( offset + len + IO_PAGE_SIZE - 1 ) / IO_PAGE_SIZE );
 	assert ( count != 0 );
-	assert ( count < ( sizeof ( io_pages.page ) /
-			   sizeof ( io_pages.page[0] ) ) );
+	assert ( count <= IO_PAGE_COUNT );
 
 	/* Round up number of pages to a power of two */
-	stride = ( 1 << ( fls ( count ) - 1 ) );
+	stride = ( 1 << fls ( count - 1 ) );
 	assert ( count <= stride );
 
 	/* Allocate pages */
-	for ( first = 0 ; first < ( sizeof ( io_pages.page ) /
-				    sizeof ( io_pages.page[0] ) ) ;
-	      first += stride ) {
+	for ( first = 0 ; first < IO_PAGE_COUNT ; first += stride ) {
 
 		/* Calculate I/O address */
 		io_addr = ( IO_BASE + ( first * IO_PAGE_SIZE ) + offset );
@@ -271,6 +369,10 @@ static void iounmap_pages ( volatile const void *io_addr ) {
 	/* Calculate first page table entry */
 	first = ( ( io_addr - IO_BASE ) / IO_PAGE_SIZE );
 
+	/* Ignore unmappings outside of the I/O range */
+	if ( first >= IO_PAGE_COUNT )
+		return;
+
 	/* Clear page table entries */
 	for ( i = first ; ; i++ ) {
 
@@ -296,16 +398,44 @@ static void iounmap_pages ( volatile const void *io_addr ) {
 	       io_addr, first, i );
 }
 
-PROVIDE_UACCESS_INLINE ( librm, phys_to_user );
-PROVIDE_UACCESS_INLINE ( librm, user_to_phys );
-PROVIDE_UACCESS_INLINE ( librm, virt_to_user );
-PROVIDE_UACCESS_INLINE ( librm, user_to_virt );
-PROVIDE_UACCESS_INLINE ( librm, userptr_add );
-PROVIDE_UACCESS_INLINE ( librm, memcpy_user );
-PROVIDE_UACCESS_INLINE ( librm, memmove_user );
-PROVIDE_UACCESS_INLINE ( librm, memset_user );
-PROVIDE_UACCESS_INLINE ( librm, strlen_user );
-PROVIDE_UACCESS_INLINE ( librm, memchr_user );
+/**
+ * Check for FXSAVE/FXRSTOR instruction support
+ *
+ */
+__asmcall void check_fxsr ( struct i386_all_regs *regs ) {
+	struct x86_features features;
+
+	/* Check for FXSR bit */
+	x86_features ( &features );
+	if ( ! ( features.intel.edx & CPUID_FEATURES_INTEL_EDX_FXSR ) )
+		regs->flags |= CF;
+	DBGC ( &features, "FXSAVE/FXRSTOR is%s supported\n",
+	       ( ( regs->flags & CF ) ? " not" : "" ) );
+}
+
+/**
+ * Set up startup IPI handler
+ *
+ * @v vector		Startup IPI vector
+ * @v handler		Protected-mode startup IPI handler physical address
+ * @v regs		Initial register state
+ */
+void setup_sipi ( unsigned int vector, uint32_t handler,
+		  struct i386_regs *regs ) {
+
+	/* Record protected-mode handler */
+	sipi_handler = handler;
+
+	/* Update copy of rm_ds */
+	sipi_ds = rm_ds;
+
+	/* Save register state */
+	memcpy ( &sipi_regs, regs, sizeof ( sipi_regs ) );
+
+	/* Copy real-mode handler */
+	copy_to_real ( ( vector << 8 ), 0, sipi, sipi_len );
+}
+
 PROVIDE_IOMAP_INLINE ( pages, io_to_bus );
 PROVIDE_IOMAP ( pages, ioremap, ioremap_pages );
 PROVIDE_IOMAP ( pages, iounmap, iounmap_pages );

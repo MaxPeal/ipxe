@@ -20,6 +20,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <config/timer.h>
 
@@ -45,4 +46,13 @@ REQUIRE_OBJECT ( efi_timer );
 #endif
 #ifdef TIMER_LINUX
 REQUIRE_OBJECT ( linux_timer );
+#endif
+#ifdef TIMER_ACPI
+REQUIRE_OBJECT ( acpi_timer );
+#endif
+#ifdef TIMER_ZICNTR
+REQUIRE_OBJECT ( zicntr );
+#endif
+#ifdef TIMER_TOD
+REQUIRE_OBJECT ( tod );
 #endif

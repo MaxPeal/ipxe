@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <strings.h>
@@ -47,22 +48,26 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 struct io_buffer * alloc_iob_raw ( size_t len, size_t align, size_t offset ) {
 	struct io_buffer *iobuf;
+	size_t headroom;
+	size_t tailroom;
 	size_t padding;
 	size_t threshold;
 	unsigned int align_log2;
 	void *data;
 
-	/* Calculate padding required below alignment boundary to
-	 * ensure that a correctly aligned inline struct io_buffer
-	 * could fit (regardless of the requested offset).
+	/* Round up requested alignment and calculate initial headroom
+	 * and tailroom to ensure that no cachelines are shared
+	 * between I/O buffer data and other data structures.
 	 */
-	padding = ( sizeof ( *iobuf ) + __alignof__ ( *iobuf ) - 1 );
-
-	/* Round up requested alignment to at least the size of the
-	 * padding, to simplify subsequent calculations.
-	 */
-	if ( align < padding )
-		align = padding;
+	if ( align < IOB_ZLEN )
+		align = IOB_ZLEN;
+	headroom = ( offset & ( IOB_ZLEN - 1 ) );
+	tailroom = ( ( - len - offset ) & ( IOB_ZLEN - 1 ) );
+	padding = ( headroom + tailroom );
+	offset -= headroom;
+	len += padding;
+	if ( len < padding )
+		return NULL;
 
 	/* Round up alignment to the nearest power of two, avoiding
 	 * a potentially undefined shift operation.
@@ -73,8 +78,8 @@ struct io_buffer * alloc_iob_raw ( size_t len, size_t align, size_t offset ) {
 	align = ( 1UL << align_log2 );
 
 	/* Calculate length threshold */
-	assert ( align >= padding );
-	threshold = ( align - padding );
+	assert ( align >= sizeof ( *iobuf ) );
+	threshold = ( align - sizeof ( *iobuf ) );
 
 	/* Allocate buffer plus an inline descriptor as a single unit,
 	 * unless doing so would push the total size over the
@@ -82,14 +87,9 @@ struct io_buffer * alloc_iob_raw ( size_t len, size_t align, size_t offset ) {
 	 */
 	if ( len <= threshold ) {
 
-		/* Round up buffer length to ensure that struct
-		 * io_buffer is aligned.
-		 */
-		len += ( ( - len - offset ) & ( __alignof__ ( *iobuf ) - 1 ) );
-
 		/* Allocate memory for buffer plus descriptor */
-		data = malloc_dma_offset ( len + sizeof ( *iobuf ), align,
-					   offset );
+		data = malloc_phys_offset ( len + sizeof ( *iobuf ), align,
+					    offset );
 		if ( ! data )
 			return NULL;
 		iobuf = ( data + len );
@@ -97,20 +97,22 @@ struct io_buffer * alloc_iob_raw ( size_t len, size_t align, size_t offset ) {
 	} else {
 
 		/* Allocate memory for buffer */
-		data = malloc_dma_offset ( len, align, offset );
+		data = malloc_phys_offset ( len, align, offset );
 		if ( ! data )
 			return NULL;
 
 		/* Allocate memory for descriptor */
 		iobuf = malloc ( sizeof ( *iobuf ) );
 		if ( ! iobuf ) {
-			free_dma ( data, len );
+			free_phys ( data, len );
 			return NULL;
 		}
 	}
 
 	/* Populate descriptor */
-	iobuf->head = iobuf->data = iobuf->tail = data;
+	memset ( &iobuf->map, 0, sizeof ( iobuf->map ) );
+	iobuf->head = data;
+	iobuf->data = iobuf->tail = ( data + headroom );
 	iobuf->end = ( data + len );
 
 	return iobuf;
@@ -123,18 +125,24 @@ struct io_buffer * alloc_iob_raw ( size_t len, size_t align, size_t offset ) {
  * @ret iobuf	I/O buffer, or NULL if none available
  *
  * The I/O buffer will be physically aligned on its own size (rounded
- * up to the nearest power of two).
+ * up to the nearest power of two), up to a maximum of page-size
+ * alignment.
  */
 struct io_buffer * alloc_iob ( size_t len ) {
+	size_t align;
 
 	/* Pad to minimum length */
 	if ( len < IOB_ZLEN )
 		len = IOB_ZLEN;
 
-	/* Align buffer on its own size to avoid potential problems
-	 * with boundary-crossing DMA.
+	/* Align buffer on its own size (up to page size) to avoid
+	 * potential problems with boundary-crossing DMA.
 	 */
-	return alloc_iob_raw ( len, len, 0 );
+	align = len;
+	if ( align > PAGE_SIZE )
+		align = PAGE_SIZE;
+
+	return alloc_iob_raw ( len, align, 0 );
 }
 
 /**
@@ -153,20 +161,64 @@ void free_iob ( struct io_buffer *iobuf ) {
 	assert ( iobuf->head <= iobuf->data );
 	assert ( iobuf->data <= iobuf->tail );
 	assert ( iobuf->tail <= iobuf->end );
+	assert ( ! dma_mapped ( &iobuf->map ) );
 
 	/* Free buffer */
 	len = ( iobuf->end - iobuf->head );
 	if ( iobuf->end == iobuf ) {
 
 		/* Descriptor is inline */
-		free_dma ( iobuf->head, ( len + sizeof ( *iobuf ) ) );
+		free_phys ( iobuf->head, ( len + sizeof ( *iobuf ) ) );
 
 	} else {
 
 		/* Descriptor is detached */
-		free_dma ( iobuf->head, len );
+		free_phys ( iobuf->head, len );
 		free ( iobuf );
 	}
+}
+
+/**
+ * Allocate and map I/O buffer for receive DMA
+ *
+ * @v len		Length of I/O buffer
+ * @v dma		DMA device
+ * @ret iobuf		I/O buffer, or NULL on error
+ */
+struct io_buffer * alloc_rx_iob ( size_t len, struct dma_device *dma ) {
+	struct io_buffer *iobuf;
+	int rc;
+
+	/* Allocate I/O buffer */
+	iobuf = alloc_iob ( len );
+	if ( ! iobuf )
+		goto err_alloc;
+
+	/* Map I/O buffer */
+	if ( ( rc = iob_map_rx ( iobuf, dma ) ) != 0 )
+		goto err_map;
+
+	return iobuf;
+
+	iob_unmap ( iobuf );
+ err_map:
+	free_iob ( iobuf );
+ err_alloc:
+	return NULL;
+}
+
+/**
+ * Unmap and free I/O buffer for receive DMA
+ *
+ * @v iobuf	I/O buffer
+ */
+void free_rx_iob ( struct io_buffer *iobuf ) {
+
+	/* Unmap I/O buffer */
+	iob_unmap ( iobuf );
+
+	/* Free I/O buffer */
+	free_iob ( iobuf );
 }
 
 /**
@@ -215,7 +267,7 @@ struct io_buffer * iob_concatenate ( struct list_head *list ) {
 		len += iob_len ( iobuf );
 
 	/* Allocate new I/O buffer */
-	concatenated = alloc_iob_raw ( len, __alignof__ ( *iobuf ), 0 );
+	concatenated = alloc_iob_raw ( len, IOB_ZLEN, 0 );
 	if ( ! concatenated )
 		return NULL;
 

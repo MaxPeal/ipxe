@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <errno.h>
@@ -41,6 +42,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/efi_snp.h>
 #include <ipxe/efi/efi_pxe.h>
+#include <ipxe/efi/efi_null.h>
 #include <ipxe/efi/Protocol/PxeBaseCode.h>
 #include <ipxe/efi/Protocol/AppleNetBoot.h>
 #include <usr/ifmgmt.h>
@@ -94,6 +96,8 @@ struct efi_pxe {
 
 	/** (M)TFTP download interface */
 	struct interface tftp;
+	/** Opcode */
+	unsigned int opcode;
 	/** Block size (for TFTP) */
 	size_t blksize;
 	/** Overall return status */
@@ -198,7 +202,7 @@ static void efi_pxe_ip_sockaddr ( struct efi_pxe *pxe, EFI_IP_ADDRESS *ip,
 	memset ( sockaddr, 0, sizeof ( *sockaddr ) );
 	sockaddr->sa.sa_family = pxe->tcpip->sa_family;
 	memcpy ( &sockaddr->se.se_addr, ip, pxe->net->net_addr_len );
-	sockaddr->se.se_scope_id = pxe->netdev->index;
+	sockaddr->se.se_scope_id = pxe->netdev->scope_id;
 }
 
 /**
@@ -263,6 +267,7 @@ static int efi_pxe_ip_filter ( struct efi_pxe *pxe, EFI_IP_ADDRESS *ip ) {
 		struct in6_addr in6;
 	} *u = container_of ( ip, typeof ( *u ), ip );
 	size_t addr_len = pxe->net->net_addr_len;
+	unsigned int max;
 	unsigned int i;
 
 	/* Match everything, if applicable */
@@ -294,55 +299,14 @@ static int efi_pxe_ip_filter ( struct efi_pxe *pxe, EFI_IP_ADDRESS *ip ) {
 	}
 
 	/* Match explicit addresses, if applicable */
-	for ( i = 0 ; i < filter->IpCnt ; i++ ) {
+	max = ( sizeof ( filter->IpList ) / sizeof ( filter->IpList[0] ) );
+	for ( i = 0 ; ( ( i < filter->IpCnt ) && ( i < max ) ) ; i++ ) {
 		if ( memcmp ( ip, &filter->IpList[i], addr_len ) == 0 )
 			return 1;
 	}
 
 	return 0;
 }
-
-/******************************************************************************
- *
- * Data transfer buffer
- *
- ******************************************************************************
- */
-
-/**
- * Reallocate PXE data transfer buffer
- *
- * @v xferbuf		Data transfer buffer
- * @v len		New length (or zero to free buffer)
- * @ret rc		Return status code
- */
-static int efi_pxe_buf_realloc ( struct xfer_buffer *xferbuf __unused,
-				 size_t len __unused ) {
-
-	/* Can never reallocate: return EFI_BUFFER_TOO_SMALL */
-	return -ERANGE;
-}
-
-/**
- * Write data to PXE data transfer buffer
- *
- * @v xferbuf		Data transfer buffer
- * @v offset		Starting offset
- * @v data		Data to copy
- * @v len		Length of data
- */
-static void efi_pxe_buf_write ( struct xfer_buffer *xferbuf, size_t offset,
-				const void *data, size_t len ) {
-
-	/* Copy data to buffer */
-	memcpy ( ( xferbuf->data + offset ), data, len );
-}
-
-/** PXE data transfer buffer operations */
-static struct xfer_buffer_operations efi_pxe_buf_operations = {
-	.realloc = efi_pxe_buf_realloc,
-	.write = efi_pxe_buf_write,
-};
 
 /******************************************************************************
  *
@@ -394,11 +358,17 @@ static int efi_pxe_tftp_deliver ( struct efi_pxe *pxe,
 	/* Deliver to data transfer buffer */
 	if ( ( rc = xferbuf_deliver ( &pxe->buf, iob_disown ( iobuf ),
 				      meta ) ) != 0 )
-		goto err_deliver;
+		goto done;
+
+	/* Stop when filesize is known, if applicable */
+	if ( ( pxe->opcode == EFI_PXE_BASE_CODE_TFTP_GET_FILE_SIZE ) &&
+	     ( meta->flags & XFER_FL_ABS_OFFSET ) ) {
+		goto done;
+	}
 
 	return 0;
 
- err_deliver:
+ done:
 	efi_pxe_tftp_close ( pxe, rc );
 	return rc;
 }
@@ -755,7 +725,8 @@ static EFI_STATUS EFIAPI efi_pxe_start ( EFI_PXE_BASE_CODE_PROTOCOL *base,
 	sa_family_t family = ( use_ipv6 ? AF_INET6 : AF_INET );
 	int rc;
 
-	DBGC ( pxe, "PXE %s START %s\n", pxe->name, ( ipv6 ? "IPv6" : "IPv4" ));
+	DBGC ( pxe, "PXE %s START %s\n",
+	       pxe->name, ( use_ipv6 ? "IPv6" : "IPv4" ) );
 
 	/* Initialise mode structure */
 	memset ( mode, 0, sizeof ( *mode ) );
@@ -947,7 +918,8 @@ efi_pxe_mtftp ( EFI_PXE_BASE_CODE_PROTOCOL *base,
 
 	/* Fail unless operation is supported */
 	if ( ! ( ( opcode == EFI_PXE_BASE_CODE_TFTP_READ_FILE ) ||
-		 ( opcode == EFI_PXE_BASE_CODE_MTFTP_READ_FILE ) ) ) {
+		 ( opcode == EFI_PXE_BASE_CODE_MTFTP_READ_FILE ) ||
+		 ( opcode == EFI_PXE_BASE_CODE_TFTP_GET_FILE_SIZE ) ) ) {
 		DBGC ( pxe, "PXE %s unsupported MTFTP opcode %d\n",
 		       pxe->name, opcode );
 		rc = -ENOTSUP;
@@ -964,8 +936,12 @@ efi_pxe_mtftp ( EFI_PXE_BASE_CODE_PROTOCOL *base,
 	pxe->blksize = ( ( callback && blksize ) ? *blksize : -1UL );
 
 	/* Initialise data transfer buffer */
-	pxe->buf.data = data;
-	pxe->buf.len = *len;
+	memset ( &pxe->buf, 0, sizeof ( pxe->buf ) );
+	if ( opcode == EFI_PXE_BASE_CODE_TFTP_GET_FILE_SIZE ) {
+		xferbuf_void_init ( &pxe->buf );
+	} else {
+		xferbuf_fixed_init ( &pxe->buf, data, *len );
+	}
 
 	/* Open download */
 	if ( ( rc = efi_pxe_tftp_open ( pxe, ip,
@@ -973,18 +949,23 @@ efi_pxe_mtftp ( EFI_PXE_BASE_CODE_PROTOCOL *base,
 		goto err_open;
 
 	/* Wait for download to complete */
+	pxe->opcode = opcode;
 	pxe->rc = -EINPROGRESS;
 	while ( pxe->rc == -EINPROGRESS )
 		step();
+	*len = pxe->buf.max;
 	if ( ( rc = pxe->rc ) != 0 ) {
-		DBGC ( pxe, "PXE %s download failed: %s\n",
-		       pxe->name, strerror ( rc ) );
+		DBGC ( pxe, "PXE %s MTFTP %d failed: %s\n",
+		       pxe->name, opcode, strerror ( rc ) );
 		goto err_download;
 	}
+	DBGC ( pxe, "PXE %s MTFTP %d %p+%llx complete\n",
+	       pxe->name, opcode, data, *len );
 
  err_download:
 	efi_pxe_tftp_close ( pxe, rc );
  err_open:
+	xferbuf_fixed_init ( &pxe->buf, NULL, 0 );
 	efi_snp_release();
  err_opcode:
 	return EFIRC ( rc );
@@ -1306,14 +1287,18 @@ efi_pxe_set_ip_filter ( EFI_PXE_BASE_CODE_PROTOCOL *base,
 			EFI_PXE_BASE_CODE_IP_FILTER *filter ) {
 	struct efi_pxe *pxe = container_of ( base, struct efi_pxe, base );
 	EFI_PXE_BASE_CODE_MODE *mode = &pxe->mode;
+	unsigned int max;
 	unsigned int i;
 
 	DBGC ( pxe, "PXE %s SET IP FILTER %02x",
 	       pxe->name, filter->Filters );
-	for ( i = 0 ; i < filter->IpCnt ; i++ ) {
+	max = ( sizeof ( filter->IpList ) / sizeof ( filter->IpList[0] ) );
+	for ( i = 0 ; ( ( i < filter->IpCnt ) && ( i < max ) ) ; i++ ) {
 		DBGC ( pxe, " %s",
 		       efi_pxe_ip_ntoa ( pxe, &filter->IpList[i] ) );
 	}
+	if ( filter->IpCnt > max )
+		DBGC ( pxe, " (invalid count %d)", filter->IpCnt );
 	DBGC ( pxe, "\n" );
 
 	/* Update filter */
@@ -1591,6 +1576,7 @@ int efi_pxe_install ( EFI_HANDLE handle, struct net_device *netdev ) {
 	struct efi_pxe *pxe;
 	struct in_addr ip;
 	BOOLEAN use_ipv6;
+	int leak = 0;
 	EFI_STATUS efirc;
 	int rc;
 
@@ -1608,7 +1594,6 @@ int efi_pxe_install ( EFI_HANDLE handle, struct net_device *netdev ) {
 	pxe->base.Mode = &pxe->mode;
 	memcpy ( &pxe->apple, &efi_apple_net_boot_protocol,
 		 sizeof ( pxe->apple ) );
-	pxe->buf.op = &efi_pxe_buf_operations;
 	intf_init ( &pxe->tftp, &efi_pxe_tftp_desc, &pxe->refcnt );
 	intf_init ( &pxe->udp, &efi_pxe_udp_desc, &pxe->refcnt );
 	INIT_LIST_HEAD ( &pxe->queue );
@@ -1643,14 +1628,23 @@ int efi_pxe_install ( EFI_HANDLE handle, struct net_device *netdev ) {
 	       pxe->name, efi_handle_name ( handle ) );
 	return 0;
 
-	bs->UninstallMultipleProtocolInterfaces (
+	if ( ( efirc = bs->UninstallMultipleProtocolInterfaces (
 			handle,
 			&efi_pxe_base_code_protocol_guid, &pxe->base,
 			&efi_apple_net_boot_protocol_guid, &pxe->apple,
-			NULL );
+			NULL ) ) != 0 ) {
+		DBGC ( pxe, "PXE %s could not uninstall: %s\n",
+		       pxe->name, strerror ( -EEFI ( efirc ) ) );
+		leak = 1;
+	}
+	efi_nullify_pxe ( &pxe->base );
+	efi_nullify_apple ( &pxe->apple );
  err_install_protocol:
-	ref_put ( &pxe->refcnt );
+	if ( ! leak )
+		ref_put ( &pxe->refcnt );
  err_alloc:
+	if ( leak )
+		DBGC ( pxe, "PXE %s nullified and leaked\n", pxe->name );
 	return rc;
 }
 
@@ -1662,10 +1656,12 @@ int efi_pxe_install ( EFI_HANDLE handle, struct net_device *netdev ) {
 void efi_pxe_uninstall ( EFI_HANDLE handle ) {
 	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	struct efi_pxe *pxe;
+	int leak = efi_shutdown_in_progress;
+	EFI_STATUS efirc;
 
 	/* Locate PXE base code */
 	pxe = efi_pxe_find ( handle );
-	if ( ! handle ) {
+	if ( ! pxe ) {
 		DBG ( "PXE could not find base code for %s\n",
 		      efi_handle_name ( handle ) );
 		return;
@@ -1675,13 +1671,25 @@ void efi_pxe_uninstall ( EFI_HANDLE handle ) {
 	efi_pxe_stop ( &pxe->base );
 
 	/* Uninstall PXE base code protocol */
-	bs->UninstallMultipleProtocolInterfaces (
+	if ( ( ! efi_shutdown_in_progress ) &&
+	     ( ( efirc = bs->UninstallMultipleProtocolInterfaces (
 			handle,
 			&efi_pxe_base_code_protocol_guid, &pxe->base,
 			&efi_apple_net_boot_protocol_guid, &pxe->apple,
-			NULL );
+			NULL ) ) != 0 ) ) {
+		DBGC ( pxe, "PXE %s could not uninstall: %s\n",
+		       pxe->name, strerror ( -EEFI ( efirc ) ) );
+		leak = 1;
+	}
+	efi_nullify_pxe ( &pxe->base );
+	efi_nullify_apple ( &pxe->apple );
 
 	/* Remove from list and drop list's reference */
 	list_del ( &pxe->list );
-	ref_put ( &pxe->refcnt );
+	if ( ! leak )
+		ref_put ( &pxe->refcnt );
+
+	/* Report leakage, if applicable */
+	if ( leak && ( ! efi_shutdown_in_progress ) )
+		DBGC ( pxe, "PXE %s nullified and leaked\n", pxe->name );
 }

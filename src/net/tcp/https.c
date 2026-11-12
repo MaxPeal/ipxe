@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /**
  * @file
@@ -31,11 +32,23 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 
 #include <ipxe/open.h>
+#include <ipxe/uri.h>
 #include <ipxe/tls.h>
 #include <ipxe/http.h>
 #include <ipxe/features.h>
 
 FEATURE ( FEATURE_PROTOCOL, "HTTPS", DHCP_EB_FEATURE_HTTPS, 1 );
+
+/**
+ * Add HTTPS filter
+ *
+ * @v conn		HTTP connection
+ * @ret rc		Return status code
+ */
+static int https_filter ( struct http_connection *conn ) {
+
+	return add_tls ( &conn->socket, conn->uri->host, NULL, NULL );
+}
 
 /** HTTPS URI opener */
 struct uri_opener https_uri_opener __uri_opener = {
@@ -47,5 +60,5 @@ struct uri_opener https_uri_opener __uri_opener = {
 struct http_scheme https_scheme __http_scheme = {
 	.name = "https",
 	.port = HTTPS_PORT,
-	.filter = add_tls,
+	.filter = https_filter,
 };

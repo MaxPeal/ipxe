@@ -20,8 +20,11 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
+#include <config/general.h>
 #include <config/usb.h>
+#include <config/settings.h>
 
 /** @file
  *
@@ -53,10 +56,27 @@ REQUIRE_OBJECT ( usbio );
 #ifdef USB_KEYBOARD
 REQUIRE_OBJECT ( usbkbd );
 #endif
+#ifdef USB_BLOCK
+REQUIRE_OBJECT ( usbblk );
+#endif
 
 /*
  * Drag in USB external interfaces
  */
 #ifdef USB_EFI
 REQUIRE_OBJECT ( efi_usb );
+#endif
+
+/*
+ * Drag in USB settings mechanism
+ */
+#ifdef USB_SETTINGS
+REQUIRE_OBJECT ( usb_settings );
+#endif
+
+/*
+ * Drag in USB commands
+ */
+#ifdef USB_CMD
+REQUIRE_OBJECT ( usb_cmd );
 #endif

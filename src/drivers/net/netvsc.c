@@ -32,6 +32,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  * bus (VMBus).  It provides a transport layer for RNDIS packets.
  */
 
+#include <string.h>
 #include <errno.h>
 #include <unistd.h>
 #include <byteswap.h>
@@ -136,7 +137,7 @@ static int netvsc_initialise ( struct netvsc_device *netvsc ) {
 static int
 netvsc_initialised ( struct netvsc_device *netvsc, const void *data,
 		     size_t len ) {
-	const struct netvsc_init_completion *cmplt = data;
+	const struct netvsc_init_completion *cmplt;
 
 	/* Check completion */
 	if ( len < sizeof ( *cmplt ) ) {
@@ -144,6 +145,7 @@ netvsc_initialised ( struct netvsc_device *netvsc, const void *data,
 		       "completion (%zd bytes)\n", netvsc->name, len );
 		return -EINVAL;
 	}
+	cmplt = data;
 	if ( cmplt->header.type != cpu_to_le32 ( NETVSC_INIT_CMPLT ) ) {
 		DBGC ( netvsc, "NETVSC %s unexpected initialisation completion "
 		       "type %d\n", netvsc->name,
@@ -225,7 +227,7 @@ static int netvsc_establish_buffer ( struct netvsc_device *netvsc,
  */
 static int netvsc_rx_established_buffer ( struct netvsc_device *netvsc,
 					  const void *data, size_t len ) {
-	const struct netvsc_rx_establish_buffer_completion *cmplt = data;
+	const struct netvsc_rx_establish_buffer_completion *cmplt;
 
 	/* Check completion */
 	if ( len < sizeof ( *cmplt ) ) {
@@ -233,6 +235,7 @@ static int netvsc_rx_established_buffer ( struct netvsc_device *netvsc,
 		       "bytes)\n", netvsc->name, len );
 		return -EINVAL;
 	}
+	cmplt = data;
 	if ( cmplt->header.type != cpu_to_le32 ( NETVSC_RX_ESTABLISH_CMPLT ) ) {
 		DBGC ( netvsc, "NETVSC %s unexpected buffer completion type "
 		       "%d\n", netvsc->name, le32_to_cpu ( cmplt->header.type));
@@ -319,7 +322,7 @@ static int netvsc_recv_data ( struct vmbus_device *vmdev, uint64_t xid,
 			      struct list_head *list ) {
 	struct rndis_device *rndis = vmbus_get_drvdata ( vmdev );
 	struct netvsc_device *netvsc = rndis->priv;
-	const struct netvsc_rndis_message *msg = data;
+	const struct netvsc_rndis_message *msg;
 	struct io_buffer *iobuf;
 	struct io_buffer *tmp;
 	int rc;
@@ -331,6 +334,7 @@ static int netvsc_recv_data ( struct vmbus_device *vmdev, uint64_t xid,
 		rc = -EINVAL;
 		goto err_sanity;
 	}
+	msg = data;
 	if ( msg->header.type != cpu_to_le32 ( NETVSC_RNDIS_MSG ) ) {
 		DBGC ( netvsc, "NETVSC %s received unexpected RNDIS packet "
 		       "type %d\n", netvsc->name,
@@ -622,7 +626,7 @@ static int netvsc_buffer_copy ( struct vmbus_xfer_pages *pages, void *data,
 		return -ERANGE;
 
 	/* Copy data from buffer */
-	copy_from_user ( data, buffer->data, offset, len );
+	memcpy ( data, ( buffer->data + offset ), len );
 
 	return 0;
 }
@@ -893,3 +897,6 @@ struct vmbus_driver netvsc_driver __vmbus_driver = {
 	.reset = netvsc_reset,
 	.remove = netvsc_remove,
 };
+
+/* Generate build rules */
+VMBUS_ROM ( "netvsc", "Hyper-V NetVSC RNDIS virtual NIC" );

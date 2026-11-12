@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/spi.h>
 #include <ipxe/spi_bit.h>
@@ -228,8 +229,9 @@ enum realtek_legacy_status {
 
 /** C+ Command Register (word) */
 #define RTL_CPCR 0xe0
-#define RTL_CPCR_DAC		0x0010	/**< PCI Dual Address Cycle Enable */
-#define RTL_CPCR_MULRW		0x0008	/**< PCI Multiple Read/Write Enable */
+#define RTL_CPCR_VLAN		0x0040	/**< VLAN tag stripping enable */
+#define RTL_CPCR_DAC		0x0010	/**< PCI Dual Address Cycle enable */
+#define RTL_CPCR_MULRW		0x0008	/**< PCI Multiple Read/Write enable */
 #define RTL_CPCR_CPRX		0x0002	/**< C+ receive enable */
 #define RTL_CPCR_CPTX		0x0001	/**< C+ transmit enable */
 
@@ -247,6 +249,8 @@ enum realtek_legacy_status {
 struct realtek_ring {
 	/** Descriptors */
 	struct realtek_descriptor *desc;
+	/** Descriptor ring DMA mapping */
+	struct dma_mapping map;
 	/** Producer index */
 	unsigned int prod;
 	/** Consumer index */
@@ -272,10 +276,22 @@ realtek_init_ring ( struct realtek_ring *ring, unsigned int count,
 	ring->reg = reg;
 }
 
+/** Receive buffer (legacy mode *) */
+struct realtek_rx_buffer {
+	/** Buffer */
+	void *data;
+	/** Buffer DMA mapping */
+	struct dma_mapping map;
+	/** Offset within buffer */
+	unsigned int offset;
+};
+
 /** A Realtek network card */
 struct realtek_nic {
 	/** Registers */
 	void *regs;
+	/** DMA device */
+	struct dma_device *dma;
 	/** SPI bit-bashing interface */
 	struct spi_bit_basher spibit;
 	/** EEPROM */
@@ -283,7 +299,9 @@ struct realtek_nic {
 	/** Non-volatile options */
 	struct nvo_block nvo;
 	/** MII interface */
-	struct mii_interface mii;
+	struct mii_interface mdio;
+	/** MII device */
+	struct mii_device mii;
 
 	/** Legacy datapath mode */
 	int legacy;
@@ -299,9 +317,7 @@ struct realtek_nic {
 	/** Receive I/O buffers */
 	struct io_buffer *rx_iobuf[RTL_NUM_RX_DESC];
 	/** Receive buffer (legacy mode) */
-	void *rx_buffer;
-	/** Offset within receive buffer (legacy mode) */
-	unsigned int rx_offset;
+	struct realtek_rx_buffer rxbuf;
 };
 
 #endif /* _REALTEK_H */

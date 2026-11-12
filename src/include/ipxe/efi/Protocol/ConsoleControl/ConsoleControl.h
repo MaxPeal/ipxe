@@ -1,3 +1,6 @@
+#ifndef _IPXE_EFI_CONSOLECONTROL_H
+#define _IPXE_EFI_CONSOLECONTROL_H
+
 /*++
 
 Copyright (c) 2004 - 2010, Intel Corporation. All rights reserved.<BR>
@@ -23,6 +26,7 @@ Abstract:
 #define __CONSOLE_CONTROL_H__
 
 FILE_LICENCE ( BSD3 );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_CONSOLE_CONTROL_PROTOCOL_GUID \
   { 0xf42f7782, 0x12e, 0x4c12, {0x99, 0x56, 0x49, 0xf9, 0x43, 0x4, 0xf7, 0x21} }
@@ -122,3 +126,5 @@ struct _EFI_CONSOLE_CONTROL_PROTOCOL {
 extern EFI_GUID gEfiConsoleControlProtocolGuid;
 
 #endif
+
+#endif /* _IPXE_EFI_CONSOLECONTROL_H */

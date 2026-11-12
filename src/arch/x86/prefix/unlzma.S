@@ -43,8 +43,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  ****************************************************************************
  */
 
-	.text
-	.arch i586
+	.section ".note.GNU-stack"
+	.code32
+	.arch i386
 	.section ".prefix.lib", "ax", @progbits
 
 #ifdef CODE16
@@ -231,7 +232,7 @@ rep_len_dec:	.space	sizeof__lzma_len_dec
 literal:	.rept	( ( 1 << LZMA_LC ) * 0x300 )
 		.word	0
 		.endr
-	.align	4
+	.balign	4
 	.equ	sizeof__lzma_dec, . - lzma_dec
 	.previous
 
@@ -961,7 +962,9 @@ decompress:
 	ADDR32 lodsb	/* discard initial byte */
 	print_hex_byte %al
 	ADDR32 lodsl
-	bswapl	%eax
+	xchgb	%al, %ah
+	roll	$16, %eax
+	xchgb	%al, %ah
 	print_hex_dword %eax
 	print_character $('\n')
 	movl	%eax, rc_code(%ebp)

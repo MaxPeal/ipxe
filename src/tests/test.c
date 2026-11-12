@@ -34,6 +34,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 #include <errno.h>
 #include <assert.h>
 #include <ipxe/test.h>
@@ -119,7 +120,7 @@ static int run_all_tests ( void ) {
 	unsigned int total = 0;
 
 	/* Run all compiled-in self-tests */
-	printf ( "Starting self-tests\n" );
+	printf ( "Starting %s self-tests\n", _S2 ( ARCH ) );
 	for_each_table_entry ( tests, SELF_TESTS )
 		run_tests ( tests );
 
@@ -161,7 +162,9 @@ static struct image_type test_image_type = {
 static struct image test_image = {
 	.refcnt = REF_INIT ( ref_no_free ),
 	.name = "<TESTS>",
+	.flags = ( IMAGE_STATIC | IMAGE_STATIC_NAME ),
 	.type = &test_image_type,
+	.data = empty_image_data,
 };
 
 static void test_init ( void ) {
@@ -178,5 +181,6 @@ static void test_init ( void ) {
 
 /** Self-test initialisation function */
 struct init_fn test_init_fn __init_fn ( INIT_EARLY ) = {
+	.name = "test",
 	.initialise = test_init,
 };

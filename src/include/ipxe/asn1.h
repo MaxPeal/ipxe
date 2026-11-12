@@ -8,9 +8,11 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdarg.h>
 #include <assert.h>
 #include <time.h>
 #include <ipxe/tables.h>
@@ -75,11 +77,17 @@ struct asn1_builder_header {
 /** ASN.1 enumeration */
 #define ASN1_ENUMERATED 0x0a
 
+/** ASN.1 UTF-8 string */
+#define ASN1_UTF8_STRING 0x0c
+
 /** ASN.1 UTC time */
 #define ASN1_UTC_TIME 0x17
 
 /** ASN.1 generalized time */
 #define ASN1_GENERALIZED_TIME 0x18
+
+/** ASN.1 high tag number */
+#define ASN1_HIGH 0x1f
 
 /** ASN.1 sequence */
 #define ASN1_SEQUENCE 0x30
@@ -95,6 +103,10 @@ struct asn1_builder_header {
 
 /** ASN.1 "any tag" magic value */
 #define ASN1_ANY -1U
+
+/** Construct a short ASN.1 value */
+#define ASN1_SHORT( tag, ... ) \
+	(tag), VA_ARG_COUNT ( __VA_ARGS__ ), __VA_ARGS__
 
 /** Initial OID byte */
 #define ASN1_OID_INITIAL( first, second ) ( ( (first) * 40 ) + (second) )
@@ -119,6 +131,42 @@ struct asn1_builder_header {
 #define ASN1_OID_TRIPLE( value ) \
 	( 0x80 | ( ( (value) >> 14 ) & 0x7f ) ), ASN1_OID_DOUBLE ( (value) )
 
+/** ASN.1 OID for ecPublicKey (1.2.840.10045.2.1) */
+#define ASN1_OID_ECPUBLICKEY					\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_DOUBLE ( 10045 ), ASN1_OID_SINGLE ( 2 ),	\
+	ASN1_OID_SINGLE ( 1 )
+
+/** ASN.1 OID for prime256v1 (1.2.840.10045.3.1.7) */
+#define ASN1_OID_PRIME256V1					\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_DOUBLE ( 10045 ), ASN1_OID_SINGLE ( 3 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 7 )
+
+/** ASN.1 OID for ecdsa-with-SHA224 (1.2.840.10045.4.3.1) */
+#define ASN1_OID_ECDSA_WITH_SHA224				\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_DOUBLE ( 10045 ), ASN1_OID_SINGLE ( 4 ),	\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 1 )
+
+/** ASN.1 OID for ecdsa-with-SHA256 (1.2.840.10045.4.3.2) */
+#define ASN1_OID_ECDSA_WITH_SHA256				\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_DOUBLE ( 10045 ), ASN1_OID_SINGLE ( 4 ),	\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 2 )
+
+/** ASN.1 OID for ecdsa-with-SHA384 (1.2.840.10045.4.3.3) */
+#define ASN1_OID_ECDSA_WITH_SHA384				\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_DOUBLE ( 10045 ), ASN1_OID_SINGLE ( 4 ),	\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 3 )
+
+/** ASN.1 OID for ecdsa-with-SHA512 (1.2.840.10045.4.3.4) */
+#define ASN1_OID_ECDSA_WITH_SHA512				\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_DOUBLE ( 10045 ), ASN1_OID_SINGLE ( 4 ),	\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 4 )
+
 /** ASN.1 OID for rsaEncryption (1.2.840.113549.1.1.1) */
 #define ASN1_OID_RSAENCRYPTION					\
 	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
@@ -136,6 +184,12 @@ struct asn1_builder_header {
 	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
 	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
 	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 5 )
+
+/** ASN.1 OID for rsassa-pss (1.2.840.113549.1.1.10) */
+#define ASN1_OID_RSASSA_PSS					\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 10 )
 
 /** ASN.1 OID for sha256WithRSAEncryption (1.2.840.113549.1.1.11) */
 #define ASN1_OID_SHA256WITHRSAENCRYPTION			\
@@ -161,6 +215,24 @@ struct asn1_builder_header {
 	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
 	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 14 )
 
+/** ASN.1 OID for sha512-224WithRSAEncryption (1.2.840.113549.1.1.15) */
+#define ASN1_OID_SHA512_224WITHRSAENCRYPTION			\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 15 )
+
+/** ASN.1 OID for sha512-256WithRSAEncryption (1.2.840.113549.1.1.16) */
+#define ASN1_OID_SHA512_256WITHRSAENCRYPTION			\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 16 )
+
+/** ASN.1 OID for id-md4 (1.2.840.113549.2.4) */
+#define ASN1_OID_MD4						\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 2 ),	\
+	ASN1_OID_SINGLE ( 4 )
+
 /** ASN.1 OID for id-md5 (1.2.840.113549.2.5) */
 #define ASN1_OID_MD5						\
 	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
@@ -172,6 +244,58 @@ struct asn1_builder_header {
 	ASN1_OID_INITIAL ( 1, 3 ), ASN1_OID_SINGLE ( 14 ),	\
 	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 2 ),		\
 	ASN1_OID_SINGLE ( 26 )
+
+/** ASN.1 OID for id-x25519 (1.3.101.110) */
+#define ASN1_OID_X25519						\
+	ASN1_OID_INITIAL ( 1, 3 ), ASN1_OID_SINGLE ( 101 ),	\
+	ASN1_OID_SINGLE ( 110 )
+
+/** ASN.1 OID for secp384r1 (1.3.132.0.34) */
+#define ASN1_OID_SECP384R1					\
+	ASN1_OID_INITIAL ( 1, 3 ), ASN1_OID_DOUBLE ( 132 ),	\
+	ASN1_OID_SINGLE ( 0 ), ASN1_OID_SINGLE ( 34 )
+
+/** ASN.1 OID for id-aes128-cbc (2.16.840.1.101.3.4.1.2) */
+#define ASN1_OID_AES128_CBC					\
+	ASN1_OID_INITIAL ( 2, 16 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 101 ),		\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 4 ),		\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 2 )
+
+/** ASN.1 OID for id-aes128-gcm (2.16.840.1.101.3.4.1.6) */
+#define ASN1_OID_AES128_GCM					\
+	ASN1_OID_INITIAL ( 2, 16 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 101 ),		\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 4 ),		\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 6 )
+
+/** ASN.1 OID for id-aes192-cbc (2.16.840.1.101.3.4.1.22) */
+#define ASN1_OID_AES192_CBC					\
+	ASN1_OID_INITIAL ( 2, 16 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 101 ),		\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 4 ),		\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 22 )
+
+/** ASN.1 OID for id-aes192-gcm (2.16.840.1.101.3.4.1.26) */
+#define ASN1_OID_AES192_GCM					\
+	ASN1_OID_INITIAL ( 2, 16 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 101 ),		\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 4 ),		\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 26 )
+
+/** ASN.1 OID for id-aes256-cbc (2.16.840.1.101.3.4.1.42) */
+#define ASN1_OID_AES256_CBC					\
+	ASN1_OID_INITIAL ( 2, 16 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 101 ),		\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 4 ),		\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 42 )
+
+/** ASN.1 OID for id-aes256-gcm (2.16.840.1.101.3.4.1.46) */
+#define ASN1_OID_AES256_GCM					\
+	ASN1_OID_INITIAL ( 2, 16 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 101 ),		\
+	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 4 ),		\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 46 )
 
 /** ASN.1 OID for id-sha256 (2.16.840.1.101.3.4.2.1) */
 #define ASN1_OID_SHA256						\
@@ -242,11 +366,24 @@ struct asn1_builder_header {
 	ASN1_OID_SINGLE ( 5 ), ASN1_OID_SINGLE ( 7 ),		\
 	ASN1_OID_SINGLE ( 3 ), ASN1_OID_SINGLE ( 3 )
 
-/** ASN.1 OID for pkcs-signedData (1.2.840.113549.1.7.2) */
+/** ASN.1 OID for id-signedData (1.2.840.113549.1.7.2) */
 #define ASN1_OID_SIGNEDDATA					\
 	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
 	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
 	ASN1_OID_SINGLE ( 7 ), ASN1_OID_SINGLE ( 2 )
+
+/** ASN.1 OID for id-envelopedData (1.2.840.113549.1.7.3) */
+#define ASN1_OID_ENVELOPEDDATA					\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
+	ASN1_OID_SINGLE ( 7 ), ASN1_OID_SINGLE ( 3 )
+
+/** ASN.1 OID for id-authEnvelopedData (1.2.840.113549.1.9.16.1.23) */
+#define ASN1_OID_AUTHENVELOPEDDATA					\
+	ASN1_OID_INITIAL ( 1, 2 ), ASN1_OID_DOUBLE ( 840 ),	\
+	ASN1_OID_TRIPLE ( 113549 ), ASN1_OID_SINGLE ( 1 ),	\
+	ASN1_OID_SINGLE ( 9 ), ASN1_OID_SINGLE ( 16 ),		\
+	ASN1_OID_SINGLE ( 1 ), ASN1_OID_SINGLE ( 23 )
 
 /** ASN.1 OID for id-pe-authorityInfoAccess (1.3.6.1.5.5.7.1.1) */
 #define ASN1_OID_AUTHORITYINFOACCESS				\
@@ -282,10 +419,10 @@ struct asn1_builder_header {
 	ASN1_OID_INITIAL ( 2, 5 ), ASN1_OID_SINGLE ( 29 ),	\
 	ASN1_OID_SINGLE ( 17 )
 
-/** Define an ASN.1 cursor containing an OID */
-#define ASN1_OID_CURSOR( oid_value ) {				\
-		.data = oid_value,				\
-		.len = sizeof ( oid_value ),			\
+/** Define an ASN.1 cursor for a static value */
+#define ASN1_CURSOR( value ) {					\
+		.data = value,					\
+		.len = sizeof ( value ),			\
 	}
 
 /** An ASN.1 OID-identified algorithm */
@@ -298,6 +435,19 @@ struct asn1_algorithm {
 	struct pubkey_algorithm *pubkey;
 	/** Digest algorithm (if applicable) */
 	struct digest_algorithm *digest;
+	/** Cipher algorithm (if applicable) */
+	struct cipher_algorithm *cipher;
+	/** Elliptic curve (if applicable) */
+	struct elliptic_curve *curve;
+	/**
+	 * Parse algorithm parameters (optional)
+	 *
+	 * @v algorithm		Algorithm
+	 * @v param		Parameters to parse (and potentially modify)
+	 * @ret rc		Return status code
+	 */
+	int ( * parse ) ( struct asn1_algorithm *algorithm,
+			  struct asn1_cursor *params );
 };
 
 /** ASN.1 OID-identified algorithms */
@@ -306,15 +456,36 @@ struct asn1_algorithm {
 /** Declare an ASN.1 OID-identified algorithm */
 #define __asn1_algorithm __table_entry ( ASN1_ALGORITHMS, 01 )
 
-/** An ASN.1 bit string */
-struct asn1_bit_string {
-	/** Data */
-	const void *data;
-	/** Length */
-	size_t len;
-	/** Unused bits at end of data */
-	unsigned int unused;
-} __attribute__ (( packed ));
+/* ASN.1 OID-identified algorithms */
+extern struct asn1_algorithm rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm rsassa_pss_algorithm __asn1_algorithm;
+extern struct asn1_algorithm md5_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm
+sha1_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm
+sha224_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm
+sha256_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm
+sha384_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm
+sha512_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm
+sha512_224_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm
+sha512_256_with_rsa_encryption_algorithm __asn1_algorithm;
+extern struct asn1_algorithm oid_md4_algorithm __asn1_algorithm;
+extern struct asn1_algorithm oid_md5_algorithm __asn1_algorithm;
+extern struct asn1_algorithm oid_sha1_algorithm __asn1_algorithm;
+extern struct asn1_algorithm oid_sha256_algorithm __asn1_algorithm;
+extern struct asn1_algorithm oid_sha384_algorithm __asn1_algorithm;
+extern struct asn1_algorithm oid_sha512_algorithm __asn1_algorithm;
+extern struct asn1_algorithm oid_sha224_algorithm __asn1_algorithm;
+extern struct asn1_algorithm oid_sha512_224_algorithm __asn1_algorithm;
+extern struct asn1_algorithm oid_sha512_256_algorithm __asn1_algorithm;
+extern struct asn1_algorithm ecpubkey_algorithm __asn1_algorithm;
+extern struct asn1_algorithm prime256v1_algorithm __asn1_algorithm;
+extern struct asn1_algorithm secp384r1_algorithm __asn1_algorithm;
 
 /**
  * Invalidate ASN.1 object cursor
@@ -353,16 +524,13 @@ asn1_built ( struct asn1_builder *builder ) {
 	} *u = container_of ( builder, typeof ( *u ), builder );
 
 	/* Sanity check */
-	linker_assert ( ( ( const void * ) &u->builder.data ) ==
-			&u->cursor.data, asn1_builder_cursor_data_mismatch );
-	linker_assert ( &u->builder.len == &u->cursor.len,
-			asn1_builder_cursor_len_mismatch );
+	build_assert ( ( ( const void * ) &u->builder.data ) ==
+		       &u->cursor.data );
+	build_assert ( &u->builder.len == &u->cursor.len );
 
 	return &u->cursor;
 }
 
-extern int asn1_start ( struct asn1_cursor *cursor, unsigned int type,
-			size_t extra );
 extern int asn1_enter ( struct asn1_cursor *cursor, unsigned int type );
 extern int asn1_skip_if_exists ( struct asn1_cursor *cursor,
 				 unsigned int type );
@@ -371,24 +539,38 @@ extern int asn1_shrink ( struct asn1_cursor *cursor, unsigned int type );
 extern int asn1_enter_any ( struct asn1_cursor *cursor );
 extern int asn1_skip_any ( struct asn1_cursor *cursor );
 extern int asn1_shrink_any ( struct asn1_cursor *cursor );
+extern int asn1_enter_bits ( struct asn1_cursor *cursor,
+			     unsigned int *unused );
+extern int asn1_enter_unsigned ( struct asn1_cursor *cursor );
 extern int asn1_boolean ( const struct asn1_cursor *cursor );
 extern int asn1_integer ( const struct asn1_cursor *cursor, int *value );
-extern int asn1_bit_string ( const struct asn1_cursor *cursor,
-			     struct asn1_bit_string *bits );
-extern int asn1_integral_bit_string ( const struct asn1_cursor *cursor,
-				      struct asn1_bit_string *bits );
 extern int asn1_compare ( const struct asn1_cursor *cursor1,
 			  const struct asn1_cursor *cursor2 );
 extern int asn1_algorithm ( const struct asn1_cursor *cursor,
-			    struct asn1_algorithm **algorithm );
+			    struct asn1_algorithm **algorithm,
+			    struct asn1_cursor *params );
 extern int asn1_pubkey_algorithm ( const struct asn1_cursor *cursor,
 				   struct asn1_algorithm **algorithm );
 extern int asn1_digest_algorithm ( const struct asn1_cursor *cursor,
 				   struct asn1_algorithm **algorithm );
+extern int asn1_cipher_algorithm ( const struct asn1_cursor *cursor,
+				   struct asn1_algorithm **algorithm,
+				   struct asn1_cursor *params );
 extern int asn1_signature_algorithm ( const struct asn1_cursor *cursor,
 				      struct asn1_algorithm **algorithm );
+extern int asn1_curve_algorithm ( const struct asn1_cursor *cursor,
+				  struct asn1_algorithm *wrapper,
+				  struct asn1_algorithm **algorithm );
+extern int asn1_check_algorithm ( const struct asn1_cursor *cursor,
+				  struct asn1_algorithm *expected,
+				  struct asn1_cursor *params );
+extern int asn1_parse_cbc ( struct asn1_algorithm *algorithm,
+			    struct asn1_cursor *params );
+extern int asn1_parse_gcm ( struct asn1_algorithm *algorithm,
+			    struct asn1_cursor *params );
 extern int asn1_generalized_time ( const struct asn1_cursor *cursor,
 				   time_t *time );
+extern size_t asn1_header_len ( size_t len );
 extern int asn1_grow ( struct asn1_builder *builder, size_t extra );
 extern int asn1_prepend_raw ( struct asn1_builder *builder, const void *data,
 			      size_t len );

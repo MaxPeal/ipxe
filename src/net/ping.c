@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdlib.h>
 #include <string.h>
@@ -101,13 +102,14 @@ static int ping_port_available ( int port ) {
  * @ret rc		Return status code
  */
 int ping_rx ( struct io_buffer *iobuf, struct sockaddr_tcpip *st_src ) {
-	struct icmp_echo *echo = iobuf->data;
+	struct icmp_echo *echo;
 	struct ping_connection *ping;
 	struct xfer_metadata meta;
 	int rc;
 
 	/* Sanity check: should already have been checked by ICMP layer */
 	assert ( iob_len ( iobuf ) >= sizeof ( *echo ) );
+	echo = iobuf->data;
 
 	/* Identify connection */
 	ping = ping_demux ( ntohs ( echo->ident ) );
@@ -259,17 +261,9 @@ static int ping_open ( struct interface *xfer, struct sockaddr *peer,
 	return rc;
 }
 
-/** Ping IPv4 socket opener */
-struct socket_opener ping_ipv4_socket_opener __socket_opener = {
+/** Ping socket opener */
+struct socket_opener ping_socket_opener __socket_opener = {
 	.semantics	= PING_SOCK_ECHO,
-	.family		= AF_INET,
-	.open		= ping_open,
-};
-
-/** Ping IPv6 socket opener */
-struct socket_opener ping_ipv6_socket_opener __socket_opener = {
-	.semantics	= PING_SOCK_ECHO,
-	.family		= AF_INET6,
 	.open		= ping_open,
 };
 

@@ -41,9 +41,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 #define _pcirom_start _mrom_start
 #include "pciromprefix.S"
 
-	.text
-	.arch i386
+	.section ".note.GNU-stack"
 	.code16
+	.arch i386
 
 /* Obtain access to payload by exposing the expansion ROM BAR at the
  * address currently used by a suitably large memory BAR on the same
@@ -492,7 +492,7 @@ mromheader:
 	.word	0
 	.size	mromheader, . - mromheader
 
-	.align	4
+	.balign	4
 mpciheader:
 	.ascii	"PCIR"			/* Signature */
 	.word	pci_vendor_id		/* Vendor identification */
@@ -500,7 +500,7 @@ mpciheader:
 	.word	0x0000			/* Device list pointer */
 	.word	mpciheader_len		/* PCI data structure length */
 	.byte	0x03			/* PCI data structure revision */
-	.byte	0x02, 0x00, 0x00	/* Class code */
+	.byte	0x00, 0x00, 0x02	/* Class code */
 mpciheader_image_length:
 	.word	0			/* Image length */
 	.word	0x0001			/* Revision level */

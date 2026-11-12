@@ -22,11 +22,10 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
-#include <errno.h>
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/efi_driver.h>
-#include <ipxe/efi/efi_snp.h>
 #include "snpnet.h"
 #include "nii.h"
 
@@ -43,29 +42,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  * @ret rc		Return status code
  */
 static int snp_supported ( EFI_HANDLE device ) {
-	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
-	EFI_STATUS efirc;
+	EFI_GUID *protocol = &efi_simple_network_protocol_guid;
 
-	/* Check that this is not a device we are providing ourselves */
-	if ( find_snpdev ( device ) != NULL ) {
-		DBGCP ( device, "SNP %s is provided by this binary\n",
-			efi_handle_name ( device ) );
-		return -ENOTTY;
-	}
-
-	/* Test for presence of simple network protocol */
-	if ( ( efirc = bs->OpenProtocol ( device,
-					  &efi_simple_network_protocol_guid,
-					  NULL, efi_image_handle, device,
-					  EFI_OPEN_PROTOCOL_TEST_PROTOCOL))!=0){
-		DBGCP ( device, "SNP %s is not an SNP device\n",
-			efi_handle_name ( device ) );
-		return -EEFI ( efirc );
-	}
-	DBGC ( device, "SNP %s is an SNP device\n",
-	       efi_handle_name ( device ) );
-
-	return 0;
+	return snpnet_supported ( device, protocol, 1 );
 }
 
 /**
@@ -75,43 +54,32 @@ static int snp_supported ( EFI_HANDLE device ) {
  * @ret rc		Return status code
  */
 static int nii_supported ( EFI_HANDLE device ) {
-	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
-	EFI_STATUS efirc;
+	EFI_GUID *protocol = &efi_nii31_protocol_guid;
 
-	/* Check that this is not a device we are providing ourselves */
-	if ( find_snpdev ( device ) != NULL ) {
-		DBGCP ( device, "NII %s is provided by this binary\n",
-			efi_handle_name ( device ) );
-		return -ENOTTY;
-	}
-
-	/* Test for presence of NII protocol */
-	if ( ( efirc = bs->OpenProtocol ( device,
-					  &efi_nii31_protocol_guid,
-					  NULL, efi_image_handle, device,
-					  EFI_OPEN_PROTOCOL_TEST_PROTOCOL))!=0){
-		DBGCP ( device, "NII %s is not an NII device\n",
-			efi_handle_name ( device ) );
-		return -EEFI ( efirc );
-	}
-	DBGC ( device, "NII %s is an NII device\n",
-	       efi_handle_name ( device ) );
-
-	return 0;
+	return snpnet_supported ( device, protocol, 1 );
 }
 
 /** EFI SNP driver */
-struct efi_driver snp_driver __efi_driver ( EFI_DRIVER_NORMAL ) = {
+struct efi_driver snp_driver __efi_driver ( EFI_DRIVER_SNP ) = {
 	.name = "SNP",
 	.supported = snp_supported,
+	.exclude = snpnet_exclude,
 	.start = snpnet_start,
 	.stop = snpnet_stop,
 };
 
 /** EFI NII driver */
-struct efi_driver nii_driver __efi_driver ( EFI_DRIVER_NORMAL ) = {
+struct efi_driver nii_driver __efi_driver ( EFI_DRIVER_NII ) = {
 	.name = "NII",
 	.supported = nii_supported,
+	.exclude = nii_exclude,
 	.start = nii_start,
 	.stop = nii_stop,
 };
+
+/** Drag in MNP driver */
+REQUIRING_SYMBOL ( snp_driver );
+REQUIRE_SYMBOL ( mnp_driver );
+
+/* Generate build rules */
+EFI_ROM ( "snp", "Simple Network Protocol NIC" );

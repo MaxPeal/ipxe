@@ -22,9 +22,11 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <getopt.h>
 #include <ipxe/image.h>
 #include <ipxe/command.h>
@@ -92,6 +94,8 @@ struct imgverify_options {
 	int keep;
 	/** Download timeout */
 	unsigned long timeout;
+	/** Display only error messages */
+	int quiet;
 };
 
 /** "imgverify" option list */
@@ -102,6 +106,8 @@ static struct option_descriptor imgverify_opts[] = {
 		      struct imgverify_options, keep, parse_flag ),
 	OPTION_DESC ( "timeout", 't', required_argument,
 		      struct imgverify_options, timeout, parse_timeout),
+	OPTION_DESC ( "quiet", 'q', no_argument,
+		      struct imgverify_options, quiet, parse_flag ),
 };
 
 /** "imgverify" command descriptor */
@@ -135,11 +141,12 @@ static int imgverify_exec ( int argc, char **argv ) {
 	signature_name_uri = argv[ optind + 1 ];
 
 	/* Acquire the image */
-	if ( ( rc = imgacquire ( image_name_uri, opts.timeout, &image ) ) != 0 )
+	if ( ( rc = imgacquire ( image_name_uri, opts.timeout, opts.quiet,
+				 &image ) ) != 0 )
 		goto err_acquire_image;
 
 	/* Acquire the signature image */
-	if ( ( rc = imgacquire ( signature_name_uri, opts.timeout,
+	if ( ( rc = imgacquire ( signature_name_uri, opts.timeout, opts.quiet,
 				 &signature ) ) != 0 )
 		goto err_acquire_signature;
 
@@ -162,13 +169,5 @@ static int imgverify_exec ( int argc, char **argv ) {
 }
 
 /** Image trust management commands */
-struct command image_trust_commands[] __command = {
-	{
-		.name = "imgtrust",
-		.exec = imgtrust_exec,
-	},
-	{
-		.name = "imgverify",
-		.exec = imgverify_exec,
-	},
-};
+COMMAND ( imgtrust, imgtrust_exec );
+COMMAND ( imgverify, imgverify_exec );

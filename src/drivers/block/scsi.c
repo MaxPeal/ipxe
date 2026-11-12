@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -279,7 +280,7 @@ struct scsi_command {
 	/** Number of blocks */
 	unsigned int count;
 	/** Data buffer */
-	userptr_t buffer;
+	void *buffer;
 	/** Length of data buffer */
 	size_t len;
 	/** Command tag */
@@ -421,6 +422,8 @@ static int scsicmd_command ( struct scsi_command *scsicmd ) {
 	/* Construct command */
 	memset ( &command, 0, sizeof ( command ) );
 	memcpy ( &command.lun, &scsidev->lun, sizeof ( command.lun ) );
+	xferbuf_void_init ( &command.data_in );
+	xferbuf_void_init ( &command.data_out );
 	scsicmd->type->cmd ( scsicmd, &command );
 
 	/* Issue command */
@@ -516,8 +519,8 @@ static void scsicmd_read_cmd ( struct scsi_command *scsicmd,
 		command->cdb.read10.lba = cpu_to_be32 ( scsicmd->lba );
 		command->cdb.read10.len = cpu_to_be16 ( scsicmd->count );
 	}
-	command->data_in = scsicmd->buffer;
-	command->data_in_len = scsicmd->len;
+	xferbuf_fixed_init ( &command->data_in, scsicmd->buffer,
+			     scsicmd->len );
 }
 
 /** SCSI READ command type */
@@ -547,8 +550,8 @@ static void scsicmd_write_cmd ( struct scsi_command *scsicmd,
 		command->cdb.write10.lba = cpu_to_be32 ( scsicmd->lba );
 		command->cdb.write10.len = cpu_to_be16 ( scsicmd->count );
 	}
-	command->data_out = scsicmd->buffer;
-	command->data_out_len = scsicmd->len;
+	xferbuf_fixed_init ( &command->data_out, scsicmd->buffer,
+			     scsicmd->len );
 }
 
 /** SCSI WRITE command type */
@@ -591,13 +594,13 @@ static void scsicmd_read_capacity_cmd ( struct scsi_command *scsicmd,
 		readcap16->service_action =
 			SCSI_SERVICE_ACTION_READ_CAPACITY_16;
 		readcap16->len = cpu_to_be32 ( sizeof ( *capacity16 ) );
-		command->data_in = virt_to_user ( capacity16 );
-		command->data_in_len = sizeof ( *capacity16 );
+		xferbuf_fixed_init ( &command->data_in, capacity16,
+				     sizeof ( *capacity16 ) );
 	} else {
 		/* Use READ CAPACITY (10) */
 		readcap10->opcode = SCSI_OPCODE_READ_CAPACITY_10;
-		command->data_in = virt_to_user ( capacity10 );
-		command->data_in_len = sizeof ( *capacity10 );
+		xferbuf_fixed_init ( &command->data_in, capacity10,
+				     sizeof ( *capacity10 ) );
 	}
 }
 
@@ -609,6 +612,7 @@ static void scsicmd_read_capacity_cmd ( struct scsi_command *scsicmd,
  */
 static void scsicmd_read_capacity_done ( struct scsi_command *scsicmd,
 					 int rc ) {
+	struct scsi_device *scsidev = scsicmd->scsidev;
 	struct scsi_read_capacity_private *priv = scsicmd_priv ( scsicmd );
 	struct scsi_capacity_16 *capacity16 = &priv->capacity.capacity16;
 	struct scsi_capacity_10 *capacity10 = &priv->capacity.capacity10;
@@ -644,6 +648,9 @@ static void scsicmd_read_capacity_done ( struct scsi_command *scsicmd,
 		}
 	}
 	capacity.max_count = -1U;
+
+	/* Allow transport layer to update capacity */
+	block_capacity ( &scsidev->scsi, &capacity );
 
 	/* Return capacity to caller */
 	block_capacity ( &scsicmd->block, &capacity );
@@ -717,7 +724,7 @@ static int scsidev_command ( struct scsi_device *scsidev,
 			     struct interface *block,
 			     struct scsi_command_type *type,
 			     uint64_t lba, unsigned int count,
-			     userptr_t buffer, size_t len ) {
+			     void *buffer, size_t len ) {
 	struct scsi_command *scsicmd;
 	int rc;
 
@@ -769,7 +776,7 @@ static int scsidev_command ( struct scsi_device *scsidev,
 static int scsidev_read ( struct scsi_device *scsidev,
 			  struct interface *block,
 			  uint64_t lba, unsigned int count,
-			  userptr_t buffer, size_t len ) {
+			  void *buffer, size_t len ) {
 	return scsidev_command ( scsidev, block, &scsicmd_read,
 				 lba, count, buffer, len );
 }
@@ -788,7 +795,7 @@ static int scsidev_read ( struct scsi_device *scsidev,
 static int scsidev_write ( struct scsi_device *scsidev,
 			   struct interface *block,
 			   uint64_t lba, unsigned int count,
-			   userptr_t buffer, size_t len ) {
+			   void *buffer, size_t len ) {
 	return scsidev_command ( scsidev, block, &scsicmd_write,
 				 lba, count, buffer, len );
 }
@@ -803,7 +810,7 @@ static int scsidev_write ( struct scsi_device *scsidev,
 static int scsidev_read_capacity ( struct scsi_device *scsidev,
 				   struct interface *block ) {
 	return scsidev_command ( scsidev, block, &scsicmd_read_capacity,
-				 0, 0, UNULL, 0 );
+				 0, 0, NULL, 0 );
 }
 
 /**
@@ -816,7 +823,7 @@ static int scsidev_read_capacity ( struct scsi_device *scsidev,
 static int scsidev_test_unit_ready ( struct scsi_device *scsidev,
 				     struct interface *block ) {
 	return scsidev_command ( scsidev, block, &scsicmd_test_unit_ready,
-				 0, 0, UNULL, 0 );
+				 0, 0, NULL, 0 );
 }
 
 /**

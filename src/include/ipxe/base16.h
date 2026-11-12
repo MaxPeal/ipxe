@@ -8,9 +8,13 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <string.h>
+
+/** Treat separator as optional while decoding */
+#define HEX_DECODE_OPTIONAL 0x80
 
 /**
  * Calculate length of base16-encoded data

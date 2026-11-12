@@ -8,6 +8,10 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
+
+/** Page shift */
+#define PAGE_SHIFT 12
 
 #include <ipxe/arm_io.h>
 

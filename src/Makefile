@@ -10,6 +10,7 @@ LDFLAGS		:=
 HOST_CFLAGS	:=
 MAKEDEPS	:= Makefile
 CROSS_COMPILE	?= $(CROSS)
+SYMBOL_PREFIX	:=
 
 ###############################################################################
 #
@@ -23,17 +24,19 @@ CP		:= cp
 ECHO		:= echo
 PRINTF		:= printf
 PERL		:= perl
+PYTHON		:= python
 TRUE		:= true
-CC		:= $(CROSS_COMPILE)gcc
-CPP		:= $(CC) -E
-AS		:= $(CROSS_COMPILE)as
-LD		:= $(CROSS_COMPILE)ld
-SIZE		:= $(CROSS_COMPILE)size
-AR		:= $(CROSS_COMPILE)ar
-RANLIB		:= $(CROSS_COMPILE)ranlib
-OBJCOPY		:= $(CROSS_COMPILE)objcopy
-NM		:= $(CROSS_COMPILE)nm
-OBJDUMP		:= $(CROSS_COMPILE)objdump
+TRUNCATE	:= truncate
+CC		= $(CROSS_COMPILE)gcc
+CPP		= $(CC) -E
+AS		= $(CROSS_COMPILE)as
+LD		= $(CROSS_COMPILE)ld
+SIZE		= $(CROSS_COMPILE)size
+AR		= $(CROSS_COMPILE)ar
+RANLIB		= $(CROSS_COMPILE)ranlib
+OBJCOPY		= $(CROSS_COMPILE)objcopy
+NM		= $(CROSS_COMPILE)nm
+OBJDUMP		= $(CROSS_COMPILE)objdump
 OPENSSL		:= openssl
 CSPLIT		:= csplit
 PARSEROM	:= ./util/parserom.pl
@@ -43,17 +46,19 @@ SORTOBJDUMP	:= ./util/sortobjdump.pl
 PADIMG		:= ./util/padimg.pl
 LICENCE		:= ./util/licence.pl
 NRV2B		:= ./util/nrv2b
-ZBIN		:= ./util/zbin
+ZBIN32		:= ./util/zbin32
+ZBIN64		:= ./util/zbin64
 ELF2EFI32	:= ./util/elf2efi32
 ELF2EFI64	:= ./util/elf2efi64
 EFIROM		:= ./util/efirom
 EFIFATBIN	:= ./util/efifatbin
-ICCFIX		:= ./util/iccfix
 EINFO		:= ./util/einfo
-GENKEYMAP	:= ./util/genkeymap.pl
+GENKEYMAP	:= ./util/genkeymap.py
 DOXYGEN		:= doxygen
 LCAB		:= lcab
 QEMUIMG		:= qemu-img
+PANDOC		:= pandoc
+ENVSUBST	:= envsubst
 
 ###############################################################################
 #
@@ -62,7 +67,7 @@ QEMUIMG		:= qemu-img
 SRCDIRS		:=
 SRCDIRS		+= libgcc
 SRCDIRS		+= core
-SRCDIRS		+= net net/oncrpc net/tcp net/udp net/infiniband net/80211
+SRCDIRS		+= net net/tcp net/udp net/infiniband
 SRCDIRS		+= image
 SRCDIRS		+= drivers/bus
 SRCDIRS		+= drivers/net
@@ -71,17 +76,16 @@ SRCDIRS		+= drivers/net/e1000e
 SRCDIRS		+= drivers/net/igb
 SRCDIRS		+= drivers/net/igbvf
 SRCDIRS		+= drivers/net/phantom
-SRCDIRS		+= drivers/net/rtl818x
-SRCDIRS		+= drivers/net/ath
-SRCDIRS		+= drivers/net/ath/ath5k
-SRCDIRS		+= drivers/net/ath/ath9k
 SRCDIRS		+= drivers/net/vxge
 SRCDIRS		+= drivers/net/efi
 SRCDIRS		+= drivers/net/tg3
+SRCDIRS		+= drivers/net/bnxt
 SRCDIRS		+= drivers/net/sfc
+SRCDIRS		+= drivers/net/marvell
 SRCDIRS		+= drivers/block
 SRCDIRS		+= drivers/nvs
 SRCDIRS		+= drivers/bitbash
+SRCDIRS		+= drivers/gpio
 SRCDIRS		+= drivers/infiniband
 SRCDIRS		+= drivers/infiniband/mlx_utils_flexboot/src
 SRCDIRS		+= drivers/infiniband/mlx_utils/src/public
@@ -93,17 +97,24 @@ SRCDIRS		+= drivers/infiniband/mlx_utils/mlx_lib/mlx_link_speed
 SRCDIRS		+= drivers/infiniband/mlx_utils/mlx_lib/mlx_mtu
 SRCDIRS		+= drivers/infiniband/mlx_nodnic/src
 SRCDIRS		+= drivers/usb
+SRCDIRS		+= drivers/uart
 SRCDIRS		+= interface/pxe interface/efi interface/smbios
 SRCDIRS		+= interface/bofm
 SRCDIRS		+= interface/xen
 SRCDIRS		+= interface/hyperv
-SRCDIRS		+= tests
+SRCDIRS		+= tests tests/wycheproof
 SRCDIRS		+= crypto crypto/mishmash
 SRCDIRS		+= hci hci/commands hci/tui
 SRCDIRS		+= hci/mucurses hci/mucurses/widgets
 SRCDIRS		+= hci/keymap
 SRCDIRS		+= usr
 SRCDIRS		+= config
+SRCDIRS		+= net/oncrpc
+SRCDIRS		+= net/80211
+SRCDIRS		+= drivers/net/rtl818x
+SRCDIRS		+= drivers/net/ath
+SRCDIRS		+= drivers/net/ath/ath5k
+SRCDIRS		+= drivers/net/ath/ath9k
 
 # NON_AUTO_SRCS lists files that are excluded from the normal
 # automatic build system.
@@ -183,7 +194,7 @@ vmware : bin/8086100f.mrom bin/808610d3.mrom bin/10222000.rom bin/15ad07b0.rom
 	@$(ECHO) '    bin/10222000.rom  -- vlance/pcnet32'
 	@$(ECHO) '    bin/15ad07b0.rom  -- vmxnet3'
 	@$(ECHO) 
-	@$(ECHO) 'For more information, see http://ipxe.org/howto/vmware'
+	@$(ECHO) 'For more information, see https://ipxe.org/howto/vmware'
 	@$(ECHO)
 	@$(ECHO) '==========================================================='
 
@@ -201,18 +212,48 @@ install :
 #
 # Version number calculations
 #
-VERSION_MAJOR	= 1
-VERSION_MINOR	= 0
-VERSION_PATCH	= 0
-EXTRAVERSION	= +
+VERSION_MAJOR	:= 2
+VERSION_MINOR	:= 0
+VERSION_PATCH	:= 0
+EXTRAVERSION	:= +
+ifneq ($(wildcard ../.git/HEAD),)
+GITVERSION	:= $(shell cat ../.git/HEAD)
+ifeq ($(firstword $(GITVERSION)),ref:)
+GITREF		:= $(word 2,$(GITVERSION))
+ifneq ($(wildcard ../.git/$(GITREF)),)
+GITVERSION	:= $(shell cat ../.git/$(GITREF))
+else
+GITVERSION	:= $(shell awk -v ref="$(GITREF)" '$$2 == ref { print $1 }' \
+			   ../.git/packed-refs)
+endif
+endif
+ifeq ($(GITVERSION),)
+$(error Unable to determine git commit ID)
+endif
+endif
 MM_VERSION	= $(VERSION_MAJOR).$(VERSION_MINOR)
 VERSION		= $(MM_VERSION).$(VERSION_PATCH)$(EXTRAVERSION)
-ifneq ($(wildcard ../.git),)
-GITVERSION := $(shell git describe --always --abbrev=1 --match "" 2>/dev/null)
-VERSION		+= ($(GITVERSION))
+ifneq ($(GITVERSION),)
+VERSION		+= (g$(shell echo "$(GITVERSION)" | cut -c1-5))
 endif
 version :
 	@$(ECHO) "$(VERSION)"
+
+###############################################################################
+#
+# Predefined build shortcuts (for e.g. bin/ipxe.iso)
+
+# All drivers (defined on a per-platform basis)
+#
+DRIVERS_ipxe	+=
+
+# All drivers (excluding USB network devices)
+#
+DRIVERS_ipxe-legacy = $(filter-out $(DRIVERS_usb_net),$(DRIVERS_ipxe))
+
+# Raspberry Pi
+#
+DRIVERS_rpi	+= smsc95xx lan78xx
 
 ###############################################################################
 #

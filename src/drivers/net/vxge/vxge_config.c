@@ -16,6 +16,7 @@ FILE_LICENCE(GPL2_ONLY);
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <ipxe/malloc.h>
 #include <ipxe/pci.h>
 #include <ipxe/iobuf.h>
@@ -624,10 +625,10 @@ __vxge_hw_ring_create(struct __vxge_hw_virtualpath *vpath,
 	hldev = vpath->hldev;
 	vp_id = vpath->vp_id;
 
-	ring->rxdl = malloc_dma(sizeof(struct __vxge_hw_ring_block),
+	ring->rxdl = malloc_phys(sizeof(struct __vxge_hw_ring_block),
 			sizeof(struct __vxge_hw_ring_block));
 	if (!ring->rxdl) {
-		vxge_debug(VXGE_ERR, "%s:%d malloc_dma error\n",
+		vxge_debug(VXGE_ERR, "%s:%d malloc_phys error\n",
 				__func__, __LINE__);
 		status = VXGE_HW_ERR_OUT_OF_MEMORY;
 		goto exit;
@@ -667,7 +668,7 @@ enum vxge_hw_status __vxge_hw_ring_delete(struct __vxge_hw_ring *ring)
 	}
 
 	if (ring->rxdl) {
-		free_dma(ring->rxdl, sizeof(struct __vxge_hw_ring_block));
+		free_phys(ring->rxdl, sizeof(struct __vxge_hw_ring_block));
 		ring->rxdl = NULL;
 	}
 	ring->rxd_offset = 0;
@@ -738,17 +739,16 @@ __vxge_hw_legacy_swapper_set(struct vxge_hw_legacy_reg __iomem *legacy_reg)
 enum vxge_hw_status
 __vxge_hw_vpath_swapper_set(struct vxge_hw_vpath_reg __iomem *vpath_reg)
 {
+	u64 val64;
 	vxge_trace();
 
-#if (__BYTE_ORDER != __BIG_ENDIAN)
-	u64 val64;
-
-	val64 = readq(&vpath_reg->vpath_general_cfg1);
-	wmb();
-	val64 |= VXGE_HW_VPATH_GENERAL_CFG1_CTL_BYTE_SWAPEN;
-	writeq(val64, &vpath_reg->vpath_general_cfg1);
-	wmb();
-#endif
+	if (__BYTE_ORDER != __BIG_ENDIAN) {
+		val64 = readq(&vpath_reg->vpath_general_cfg1);
+		wmb();
+		val64 |= VXGE_HW_VPATH_GENERAL_CFG1_CTL_BYTE_SWAPEN;
+		writeq(val64, &vpath_reg->vpath_general_cfg1);
+		wmb();
+	}
 	return VXGE_HW_OK;
 }
 
@@ -826,10 +826,10 @@ __vxge_hw_fifo_create(struct __vxge_hw_virtualpath *vpath,
 	fifo->tx_intr_num = (vpath->vp_id * VXGE_HW_MAX_INTR_PER_VP)
 				+ VXGE_HW_VPATH_INTR_TX;
 
-	fifo->txdl = malloc_dma(sizeof(struct vxge_hw_fifo_txd)
+	fifo->txdl = malloc_phys(sizeof(struct vxge_hw_fifo_txd)
 				* fifo->depth, fifo->depth);
 	if (!fifo->txdl) {
-		vxge_debug(VXGE_ERR, "%s:%d malloc_dma error\n",
+		vxge_debug(VXGE_ERR, "%s:%d malloc_phys error\n",
 				__func__, __LINE__);
 		return VXGE_HW_ERR_OUT_OF_MEMORY;
 	}
@@ -846,7 +846,7 @@ enum vxge_hw_status __vxge_hw_fifo_delete(struct __vxge_hw_fifo *fifo)
 	vxge_trace();
 
 	if (fifo->txdl)
-		free_dma(fifo->txdl,
+		free_phys(fifo->txdl,
 			sizeof(struct vxge_hw_fifo_txd) * fifo->depth);
 
 	fifo->txdl = NULL;
@@ -1371,10 +1371,9 @@ __vxge_hw_vpath_kdfc_configure(struct __vxge_hw_device *hldev, u32 vp_id)
 
 	val64 |= VXGE_HW_KDFC_TRPL_FIFO_0_CTRL_MODE(
 		 VXGE_HW_KDFC_TRPL_FIFO_0_CTRL_MODE_NON_OFFLOAD_ONLY) |
-#if (__BYTE_ORDER != __BIG_ENDIAN)
-		 VXGE_HW_KDFC_TRPL_FIFO_0_CTRL_SWAP_EN |
-#endif
 		 VXGE_HW_KDFC_TRPL_FIFO_0_CTRL_SELECT(0);
+	if (__BYTE_ORDER != __BIG_ENDIAN)
+		val64 |= VXGE_HW_KDFC_TRPL_FIFO_0_CTRL_SWAP_EN;
 
 	writeq(val64, &vp_reg->kdfc_trpl_fifo_0_ctrl);
 	writeq((u64)0, &vp_reg->kdfc_trpl_fifo_0_wb_address);

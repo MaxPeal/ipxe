@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( FORBIDDEN );
 
 #include <ipxe/rsa.h>
 #include <ipxe/md5.h>
@@ -36,7 +37,7 @@ struct asn1_algorithm md5_with_rsa_encryption_algorithm __asn1_algorithm = {
 	.name = "md5WithRSAEncryption",
 	.pubkey = &rsa_algorithm,
 	.digest = &md5_algorithm,
-	.oid = ASN1_OID_CURSOR ( oid_md5_with_rsa_encryption ),
+	.oid = ASN1_CURSOR ( oid_md5_with_rsa_encryption ),
 };
 
 /** MD5 digestInfo prefix */

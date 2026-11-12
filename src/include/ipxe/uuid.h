@@ -7,6 +7,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <byteswap.h>
@@ -48,5 +49,6 @@ static inline void uuid_mangle ( union uuid *uuid ) {
 }
 
 extern const char * uuid_ntoa ( const union uuid *uuid );
+extern int uuid_aton ( const char *string, union uuid *uuid );
 
 #endif /* _IPXE_UUID_H */

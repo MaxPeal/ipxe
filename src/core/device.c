@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <ipxe/list.h>
@@ -111,6 +112,7 @@ static void remove_devices ( int booting __unused ) {
 }
 
 struct startup_fn startup_devices __startup_fn ( STARTUP_NORMAL ) = {
+	.name = "devices",
 	.startup = probe_devices,
 	.shutdown = remove_devices,
 };

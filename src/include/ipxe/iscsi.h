@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/socket.h>
@@ -21,6 +22,15 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 /** Default iSCSI port */
 #define ISCSI_PORT 3260
+
+/** Default iSCSI first burst length */
+#define ISCSI_FIRST_BURST_LEN 65536
+
+/** Default iSCSI maximum burst length */
+#define ISCSI_MAX_BURST_LEN 262144
+
+/** Default iSCSI maximum receive data segment length */
+#define ISCSI_MAX_RECV_DATA_SEG_LEN 8192
 
 /**
  * iSCSI segment lengths
@@ -577,6 +587,9 @@ struct iscsi_session {
 	/** CHAP response (used for both initiator and target auth) */
 	struct chap_response chap;
 
+	/** Maximum burst length */
+	size_t max_burst_len;
+
 	/** Initiator session ID (IANA format) qualifier
 	 *
 	 * This is part of the ISID.  It is generated randomly
@@ -697,6 +710,9 @@ struct iscsi_session {
 
 /** Target authenticated itself correctly */
 #define ISCSI_STATUS_AUTH_REVERSE_OK 0x00040000
+
+/** Target requested redirection */
+#define ISCSI_STATUS_REDIRECT_REQUIRED 0x00080000
 
 /** Default initiator IQN prefix */
 #define ISCSI_DEFAULT_IQN_PREFIX "iqn.2010-04.org.ipxe"

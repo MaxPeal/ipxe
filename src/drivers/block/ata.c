@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stddef.h>
 #include <stdlib.h>
@@ -139,30 +140,27 @@ struct ata_command_type {
 	/** Command for LBA48-capable devices */
 	uint8_t cmd_lba48;
 	/**
-	 * Calculate data-in buffer
+	 * Initialise data-in buffer
 	 *
 	 * @v atacmd		ATA command
+	 * @v xferbuf		Data transfer buffer
 	 * @v buffer		Available buffer
 	 * @v len		Available buffer length
-	 * @ret data_in		Data-in buffer
-	 * @ret data_in_len	Data-in buffer length
 	 */
-	void ( * data_in ) ( struct ata_command *atacmd, userptr_t buffer,
-			     size_t len, userptr_t *data_in,
-			     size_t *data_in_len );
+	void ( * data_in ) ( struct ata_command *atacmd,
+			     struct xfer_buffer *xferbuf,
+			     void *buffer, size_t len );
 	/**
-	 * Calculate data-out buffer
-	 *
+	 * Initialise data-out buffer
 	 *
 	 * @v atacmd		ATA command
+	 * @v xferbuf		Data transfer buffer
 	 * @v buffer		Available buffer
 	 * @v len		Available buffer length
-	 * @ret data_out	Data-out buffer
-	 * @ret data_out_len	Data-out buffer length
 	 */
-	void ( * data_out ) ( struct ata_command *atacmd, userptr_t buffer,
-			      size_t len, userptr_t *data_out,
-			      size_t *data_out_len );
+	void ( * data_out ) ( struct ata_command *atacmd,
+			      struct xfer_buffer *xferbuf,
+			      void *buffer, size_t len );
 	/**
 	 * Handle ATA command completion
 	 *
@@ -279,48 +277,44 @@ static void atacmd_done ( struct ata_command *atacmd, int rc ) {
  * Use provided data buffer for ATA command
  *
  * @v atacmd		ATA command
+ * @v xferbuf		Data transfer buffer
  * @v buffer		Available buffer
  * @v len		Available buffer length
- * @ret data		Data buffer
- * @ret data_len	Data buffer length
  */
 static void atacmd_data_buffer ( struct ata_command *atacmd __unused,
-				 userptr_t buffer, size_t len,
-				 userptr_t *data, size_t *data_len ) {
-	*data = buffer;
-	*data_len = len;
+				 struct xfer_buffer *xferbuf,
+				 void *buffer, size_t len ) {
+	xferbuf_fixed_init ( xferbuf, buffer, len );
 }
 
 /**
  * Use no data buffer for ATA command
  *
  * @v atacmd		ATA command
+ * @v xferbuf		Data transfer buffer
  * @v buffer		Available buffer
  * @v len		Available buffer length
- * @ret data		Data buffer
- * @ret data_len	Data buffer length
  */
 static void atacmd_data_none ( struct ata_command *atacmd __unused,
-			       userptr_t buffer __unused, size_t len __unused,
-			       userptr_t *data __unused,
-			       size_t *data_len __unused ) {
-	/* Nothing to do */
+			       struct xfer_buffer *xferbuf,
+			       void *buffer __unused, size_t len __unused ) {
+	xferbuf_void_init ( xferbuf );
 }
 
 /**
  * Use private data buffer for ATA command
  *
  * @v atacmd		ATA command
+ * @v xferbuf		Data transfer buffer
  * @v buffer		Available buffer
  * @v len		Available buffer length
- * @ret data		Data buffer
- * @ret data_len	Data buffer length
  */
 static void atacmd_data_priv ( struct ata_command *atacmd,
-			       userptr_t buffer __unused, size_t len __unused,
-			       userptr_t *data, size_t *data_len ) {
-	*data = virt_to_user ( atacmd_priv ( atacmd ) );
-	*data_len = atacmd->type->priv_len;
+			       struct xfer_buffer *xferbuf,
+			       void *buffer __unused, size_t len __unused ) {
+
+	xferbuf_fixed_init ( xferbuf, atacmd_priv ( atacmd ),
+			     atacmd->type->priv_len );
 }
 
 /** ATA READ command type */
@@ -455,7 +449,7 @@ static int atadev_command ( struct ata_device *atadev,
 			    struct interface *block,
 			    struct ata_command_type *type,
 			    uint64_t lba, unsigned int count,
-			    userptr_t buffer, size_t len ) {
+			    void *buffer, size_t len ) {
 	struct ata_command *atacmd;
 	struct ata_cmd command;
 	int tag;
@@ -493,10 +487,8 @@ static int atadev_command ( struct ata_device *atadev,
 		command.cb.device |= command.cb.lba.bytes.low_prev;
 	command.cb.cmd_stat =
 		( atadev->lba48 ? type->cmd_lba48 : type->cmd_lba );
-	type->data_in ( atacmd, buffer, len,
-			&command.data_in, &command.data_in_len );
-	type->data_out ( atacmd, buffer, len,
-			 &command.data_out, &command.data_out_len );
+	type->data_in ( atacmd, &command.data_in, buffer, len );
+	type->data_out ( atacmd, &command.data_out, buffer, len );
 
 	/* Issue command */
 	if ( ( tag = ata_command ( &atadev->ata, &atacmd->ata,
@@ -543,7 +535,7 @@ static int atadev_command ( struct ata_device *atadev,
 static int atadev_read ( struct ata_device *atadev,
 			 struct interface *block,
 			 uint64_t lba, unsigned int count,
-			 userptr_t buffer, size_t len ) {
+			 void *buffer, size_t len ) {
 	return atadev_command ( atadev, block, &atacmd_read,
 				lba, count, buffer, len );
 }
@@ -562,7 +554,7 @@ static int atadev_read ( struct ata_device *atadev,
 static int atadev_write ( struct ata_device *atadev,
 			  struct interface *block,
 			  uint64_t lba, unsigned int count,
-			  userptr_t buffer, size_t len ) {
+			  void *buffer, size_t len ) {
 	return atadev_command ( atadev, block, &atacmd_write,
 				lba, count, buffer, len );
 }
@@ -581,7 +573,7 @@ static int atadev_read_capacity ( struct ata_device *atadev,
 	assert ( atacmd_identify.priv_len == sizeof ( *identity ) );
 	assert ( atacmd_identify.priv_len == ATA_SECTOR_SIZE );
 	return atadev_command ( atadev, block, &atacmd_identify,
-				0, 1, UNULL, ATA_SECTOR_SIZE );
+				0, 1, NULL, ATA_SECTOR_SIZE );
 }
 
 /**

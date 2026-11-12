@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <errno.h>
@@ -76,11 +77,45 @@ static void efi_udelay ( unsigned long usecs ) {
  * @ret ticks		Current time, in ticks
  */
 static unsigned long efi_currticks ( void ) {
+	struct efi_dropped_tpl tpl;
 
-	/* EFI provides no clean way for device drivers to shut down
-	 * in preparation for handover to a booted operating system.
-	 * The platform firmware simply doesn't bother to call the
-	 * drivers' Stop() methods.  Instead, drivers must register an
+	/* UEFI manages to ingeniously combine the worst aspects of
+	 * both polling and interrupt-driven designs.  There is no way
+	 * to support proper interrupt-driven operation, since there
+	 * is no way to hook in an interrupt service routine.  A
+	 * mockery of interrupts is provided by UEFI timers, which
+	 * trigger at a preset rate and can fire at any time.
+	 *
+	 * We therefore have all of the downsides of a polling design
+	 * (inefficiency and inability to sleep until something
+	 * interesting happens) combined with all of the downsides of
+	 * an interrupt-driven design (the complexity of code that
+	 * could be preempted at any time).
+	 *
+	 * The UEFI specification expects us to litter the entire
+	 * codebase with calls to RaiseTPL() as needed for sections of
+	 * code that are not reentrant.  Since this doesn't actually
+	 * gain us any substantive benefits (since even with such
+	 * calls we would still be suffering from the limitations of a
+	 * polling design), we instead choose to run at TPL_CALLBACK
+	 * almost all of the time, dropping to a lower TPL to allow
+	 * timer ticks to occur.
+	 *
+	 * We record the external TPL at the point of entry into iPXE,
+	 * and drop back only as far as this external TPL.  This
+	 * avoids the unexpected behaviour that may arise from having
+	 * iPXE temporarily drop to TPL_APPLICATION in the middle of
+	 * an entry point invoked at TPL_CALLBACK.  The side effect is
+	 * that iPXE's view of the system time is effectively frozen
+	 * for the duration of any call made in to iPXE at
+	 * TPL_CALLBACK or higher.
+	 *
+	 *
+	 * For added excitement, UEFI provides no clean way for device
+	 * drivers to shut down in preparation for handover to a
+	 * booted operating system.  The platform firmware simply
+	 * doesn't bother to call the drivers' Stop() methods.
+	 * Instead, all non-trivial drivers must register an
 	 * EVT_SIGNAL_EXIT_BOOT_SERVICES event to be signalled when
 	 * ExitBootServices() is called, and clean up without any
 	 * reference to the EFI driver model.
@@ -97,10 +132,14 @@ static unsigned long efi_currticks ( void ) {
 	 * the API lazily assumes that the host system continues to
 	 * travel through time in the usual direction.  Work around
 	 * EFI's violation of this assumption by falling back to a
-	 * simple free-running monotonic counter.
+	 * simple free-running monotonic counter during shutdown.
 	 */
-	if ( efi_shutdown_in_progress )
+	if ( efi_shutdown_in_progress ) {
 		efi_jiffies++;
+	} else {
+		efi_drop_tpl ( &tpl );
+		efi_undrop_tpl ( &tpl );
+	}
 
 	return ( efi_jiffies * ( TICKS_PER_SEC / EFI_JIFFIES_PER_SEC ) );
 }
@@ -183,6 +222,7 @@ static void efi_tick_shutdown ( int booting __unused ) {
 
 /** Timer tick startup function */
 struct startup_fn efi_tick_startup_fn __startup_fn ( STARTUP_EARLY ) = {
+	.name = "efi_tick",
 	.startup = efi_tick_startup,
 	.shutdown = efi_tick_shutdown,
 };

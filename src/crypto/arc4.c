@@ -30,6 +30,7 @@ FILE_LICENCE ( GPL2_OR_LATER );
 /**
  * Set ARC4 key
  *
+ * @v cipher	Cipher algorithm
  * @v ctxv	ARC4 encryption context
  * @v keyv	Key to set
  * @v keylen	Length of key
@@ -39,7 +40,8 @@ FILE_LICENCE ( GPL2_OR_LATER );
  * there is no standard length for an initialisation vector in the
  * cipher.
  */
-static int arc4_setkey ( void *ctxv, const void *keyv, size_t keylen )
+static int arc4_setkey ( struct cipher_algorithm *cipher __unused, void *ctxv,
+			 const void *keyv, size_t keylen )
 {
 	struct arc4_ctx *ctx = ctxv;
 	const u8 *key = keyv;
@@ -62,6 +64,7 @@ static int arc4_setkey ( void *ctxv, const void *keyv, size_t keylen )
 /**
  * Perform ARC4 encryption or decryption
  *
+ * @v cipher	Cipher algorithm
  * @v ctxv	ARC4 encryption context
  * @v srcv	Data to encrypt or decrypt
  * @v dstv	Location to store encrypted or decrypted data
@@ -75,8 +78,8 @@ static int arc4_setkey ( void *ctxv, const void *keyv, size_t keylen )
  * If you pass a @c NULL source or destination pointer, @a len
  * keystream bytes will be consumed without encrypting any data.
  */
-static void arc4_xor ( void *ctxv, const void *srcv, void *dstv,
-		       size_t len )
+static void arc4_xor ( struct cipher_algorithm *cipher __unused, void *ctxv,
+		       const void *srcv, void *dstv, size_t len )
 {
 	struct arc4_ctx *ctx = ctxv;
 	const u8 *src = srcv;
@@ -96,12 +99,6 @@ static void arc4_xor ( void *ctxv, const void *srcv, void *dstv,
 	ctx->j = j;
 }
 
-static void arc4_setiv ( void *ctx __unused, const void *iv __unused )
-{
-	/* ARC4 does not use a fixed-length IV */
-}
-
-
 /**
  * Perform ARC4 encryption or decryption, skipping initial keystream bytes
  *
@@ -115,18 +112,24 @@ static void arc4_setiv ( void *ctx __unused, const void *iv __unused )
 void arc4_skip ( const void *key, size_t keylen, size_t skip,
 		 const void *src, void *dst, size_t msglen )
 {
+	struct cipher_algorithm *cipher = &arc4_algorithm;
 	struct arc4_ctx ctx;
-	arc4_setkey ( &ctx, key, keylen );
-	arc4_xor ( &ctx, NULL, NULL, skip );
-	arc4_xor ( &ctx, src, dst, msglen );
+
+	arc4_setkey ( cipher, &ctx, key, keylen );
+	arc4_xor ( cipher, &ctx, NULL, NULL, skip );
+	arc4_xor ( cipher, &ctx, src, dst, msglen );
 }
 
 struct cipher_algorithm arc4_algorithm = {
 	.name = "ARC4",
 	.ctxsize = ARC4_CTX_SIZE,
 	.blocksize = 1,
+	.alignsize = 1,
+	.authsize = 0,
+	.confidential = 1,
 	.setkey = arc4_setkey,
-	.setiv = arc4_setiv,
+	.setiv = cipher_null_setiv,
 	.encrypt = arc4_xor,
 	.decrypt = arc4_xor,
+	.auth = cipher_null_auth,
 };

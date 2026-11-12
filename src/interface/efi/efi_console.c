@@ -18,6 +18,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stddef.h>
 #include <string.h>
@@ -26,7 +27,9 @@ FILE_LICENCE ( GPL2_OR_LATER );
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/Protocol/ConsoleControl/ConsoleControl.h>
 #include <ipxe/ansiesc.h>
+#include <ipxe/utf8.h>
 #include <ipxe/console.h>
+#include <ipxe/keymap.h>
 #include <ipxe/init.h>
 #include <config/console.h>
 
@@ -66,6 +69,9 @@ static unsigned int efi_attr = ATTR_DEFAULT;
 /** Console control protocol */
 static EFI_CONSOLE_CONTROL_PROTOCOL *conctrl;
 EFI_REQUEST_PROTOCOL ( EFI_CONSOLE_CONTROL_PROTOCOL, &conctrl );
+
+/** Extended simple text input protocol, if present */
+static EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL *efi_conin_ex;
 
 /**
  * Handle ANSI CUP (cursor position)
@@ -197,6 +203,9 @@ static struct ansiesc_context efi_ansiesc_ctx = {
 	.handlers = efi_ansiesc_handlers,
 };
 
+/** EFI console UTF-8 accumulator */
+static struct utf8_accumulator efi_utf8_acc;
+
 /**
  * Print a character to EFI console
  *
@@ -204,13 +213,25 @@ static struct ansiesc_context efi_ansiesc_ctx = {
  */
 static void efi_putchar ( int character ) {
 	EFI_SIMPLE_TEXT_OUTPUT_PROTOCOL *conout = efi_systab->ConOut;
-	wchar_t wstr[] = { character, 0 };
+	wchar_t wstr[2];
 
 	/* Intercept ANSI escape sequences */
 	character = ansiesc_process ( &efi_ansiesc_ctx, character );
 	if ( character < 0 )
 		return;
 
+	/* Accumulate Unicode characters */
+	character = utf8_accumulate ( &efi_utf8_acc, character );
+	if ( character == 0 )
+		return;
+
+	/* Treat unrepresentable (non-UCS2) characters as invalid */
+	if ( character & ~( ( wchar_t ) -1UL ) )
+		character = UTF8_INVALID;
+
+	/* Output character */
+	wstr[0] = character;
+	wstr[1] = L'\0';
 	conout->OutputString ( conout, wstr );
 }
 
@@ -278,8 +299,12 @@ static const char * scancode_to_ansi_seq ( unsigned int scancode ) {
  */
 static int efi_getchar ( void ) {
 	EFI_SIMPLE_TEXT_INPUT_PROTOCOL *conin = efi_systab->ConIn;
+	EFI_SIMPLE_TEXT_INPUT_EX_PROTOCOL *conin_ex = efi_conin_ex;
 	const char *ansi_seq;
-	EFI_INPUT_KEY key;
+	unsigned int character;
+	unsigned int shift;
+	unsigned int toggle;
+	EFI_KEY_DATA key;
 	EFI_STATUS efirc;
 	int rc;
 
@@ -288,20 +313,63 @@ static int efi_getchar ( void ) {
 		return *(ansi_input++);
 
 	/* Read key from real EFI console */
-	if ( ( efirc = conin->ReadKeyStroke ( conin, &key ) ) != 0 ) {
-		rc = -EEFI ( efirc );
-		DBG ( "EFI could not read keystroke: %s\n", strerror ( rc ) );
-		return 0;
+	memset ( &key, 0, sizeof ( key ) );
+	if ( conin_ex ) {
+		if ( ( efirc = conin_ex->ReadKeyStrokeEx ( conin_ex,
+							   &key ) ) != 0 ) {
+			rc = -EEFI ( efirc );
+			DBG ( "EFI could not read extended keystroke: %s\n",
+			      strerror ( rc ) );
+			return 0;
+		}
+	} else {
+		if ( ( efirc = conin->ReadKeyStroke ( conin,
+						      &key.Key ) ) != 0 ) {
+			rc = -EEFI ( efirc );
+			DBG ( "EFI could not read keystroke: %s\n",
+			      strerror ( rc ) );
+			return 0;
+		}
 	}
-	DBG2 ( "EFI read key stroke with unicode %04x scancode %04x\n",
-	       key.UnicodeChar, key.ScanCode );
+	DBG2 ( "EFI read key stroke shift %08x toggle %02x unicode %04x "
+	       "scancode %04x\n", key.KeyState.KeyShiftState,
+	       key.KeyState.KeyToggleState, key.Key.UnicodeChar,
+	       key.Key.ScanCode );
 
-	/* If key has a Unicode representation, return it */
-	if ( key.UnicodeChar )
-		return key.UnicodeChar;
+	/* If key has a Unicode representation, remap and return it.
+	 * There is unfortunately no way to avoid remapping the
+	 * numeric keypad, since EFI destroys the scan code
+	 * information that would allow us to differentiate between
+	 * main keyboard and numeric keypad.
+	 */
+	if ( ( character = key.Key.UnicodeChar ) != 0 ) {
+
+		/* Apply shift state */
+		shift = key.KeyState.KeyShiftState;
+		if ( shift & EFI_SHIFT_STATE_VALID ) {
+			if ( shift & ( EFI_LEFT_CONTROL_PRESSED |
+				       EFI_RIGHT_CONTROL_PRESSED ) ) {
+				character |= KEYMAP_CTRL;
+			}
+			if ( shift & EFI_RIGHT_ALT_PRESSED ) {
+				character |= KEYMAP_ALTGR;
+			}
+		}
+
+		/* Apply toggle state */
+		toggle = key.KeyState.KeyToggleState;
+		if ( toggle & EFI_TOGGLE_STATE_VALID ) {
+			if ( toggle & EFI_CAPS_LOCK_ACTIVE ) {
+				character |= KEYMAP_CAPSLOCK_REDO;
+			}
+		}
+
+		/* Remap and return key */
+		return key_remap ( character );
+	}
 
 	/* Otherwise, check for a special key that we know about */
-	if ( ( ansi_seq = scancode_to_ansi_seq ( key.ScanCode ) ) ) {
+	if ( ( ansi_seq = scancode_to_ansi_seq ( key.Key.ScanCode ) ) ) {
 		/* Start of escape sequence: return ESC (0x1b) */
 		ansi_input = ansi_seq;
 		return 0x1b;
@@ -346,6 +414,7 @@ struct console_driver efi_console __console_driver = {
  */
 static void efi_console_init ( void ) {
 	EFI_CONSOLE_CONTROL_SCREEN_MODE mode;
+	int rc;
 
 	/* On some older EFI 1.10 implementations, we must use the
 	 * (now obsolete) EFI_CONSOLE_CONTROL_PROTOCOL to switch the
@@ -358,11 +427,25 @@ static void efi_console_init ( void ) {
 					   EfiConsoleControlScreenText );
 		}
 	}
+
+	/* Attempt to open the Simple Text Input Ex protocol on the
+	 * console input handle.  This is provably unsafe, but is
+	 * apparently the expected behaviour for all UEFI
+	 * applications.  Don't ask.
+	 */
+	if ( ( rc = efi_open_unsafe ( efi_systab->ConsoleInHandle,
+				      &efi_simple_text_input_ex_protocol_guid,
+				      &efi_conin_ex ) ) == 0 ) {
+		DBG ( "EFI using SimpleTextInputEx\n" );
+	} else {
+		DBG ( "EFI has no SimpleTextInputEx: %s\n", strerror ( rc ) );
+	}
 }
 
 /**
  * EFI console initialisation function
  */
 struct init_fn efi_console_init_fn __init_fn ( INIT_EARLY ) = {
+	.name = "eficonsole",
 	.initialise = efi_console_init,
 };

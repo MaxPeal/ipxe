@@ -8,6 +8,18 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
+
+/**
+ * Check if character is ASCII
+ *
+ * @v character		Character
+ * @ret is_ascii	Character is an ASCII character
+ */
+static inline int isascii ( int character ) {
+
+	return ( character <= '\x7f' );
+}
 
 /**
  * Check if character is a decimal digit

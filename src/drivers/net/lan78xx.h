@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include "smscusb.h"
 #include "smsc75xx.h"
@@ -48,6 +49,12 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 /** FIFO controller TX FIFO control register */
 #define LAN78XX_FCT_TX_CTL 0x00c4
 #define LAN78XX_FCT_TX_CTL_EN		0x80000000UL	/**< FCT TX enable */
+
+/** MAC control register */
+#define LAN78XX_MAC_CR 0x0100
+#define LAN78XX_MAC_CR_ADP		0x00002000UL	/**< Duplex polarity */
+#define LAN78XX_MAC_CR_ADD		0x00001000UL	/**< Auto duplex */
+#define LAN78XX_MAC_CR_ASD		0x00000800UL	/**< Auto speed */
 
 /** MAC receive register */
 #define LAN78XX_MAC_RX 0x0104

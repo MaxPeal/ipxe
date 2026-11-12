@@ -20,6 +20,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <config/general.h>
 #include <config/console.h>
@@ -78,6 +79,12 @@ REQUIRE_OBJECT ( vmconsole );
 #ifdef CONSOLE_DEBUGCON
 REQUIRE_OBJECT ( debugcon );
 #endif
+#ifdef CONSOLE_SBI
+REQUIRE_OBJECT ( sbi_console );
+#endif
+#ifdef CONSOLE_DMESG
+REQUIRE_OBJECT ( dmesg );
+#endif
 
 /*
  * Drag in all requested network protocols
@@ -122,6 +129,9 @@ REQUIRE_OBJECT ( nfs_open );
 #endif
 #ifdef DOWNLOAD_PROTO_SLAM
 REQUIRE_OBJECT ( slam );
+#endif
+#ifdef DOWNLOAD_PROTO_DATA
+REQUIRE_OBJECT ( datauri );
 #endif
 
 /*
@@ -182,6 +192,18 @@ REQUIRE_OBJECT ( efi_image );
 #ifdef IMAGE_SDI
 REQUIRE_OBJECT ( sdi );
 #endif
+#ifdef IMAGE_ZLIB
+REQUIRE_OBJECT ( zlib );
+#endif
+#ifdef IMAGE_GZIP
+REQUIRE_OBJECT ( gzip );
+#endif
+#ifdef IMAGE_UCODE
+REQUIRE_OBJECT ( ucode );
+#endif
+#ifdef IMAGE_MIME
+REQUIRE_OBJECT ( mime );
+#endif
 
 /*
  * Drag in all requested commands
@@ -216,7 +238,10 @@ REQUIRE_OBJECT ( dhcp_cmd );
 REQUIRE_OBJECT ( sanboot_cmd );
 #endif
 #ifdef MENU_CMD
-REQUIRE_OBJECT ( menu_cmd );
+REQUIRE_OBJECT ( dynui_cmd );
+#endif
+#ifdef FORM_CMD
+REQUIRE_OBJECT ( dynui_cmd );
 #endif
 #ifdef LOGIN_CMD
 REQUIRE_OBJECT ( login_cmd );
@@ -254,9 +279,6 @@ REQUIRE_OBJECT ( shell );
 #ifdef NSLOOKUP_CMD
 REQUIRE_OBJECT ( nslookup_cmd );
 #endif
-#ifdef PCI_CMD
-REQUIRE_OBJECT ( pci_cmd );
-#endif
 #ifdef PARAM_CMD
 REQUIRE_OBJECT ( param_cmd );
 #endif
@@ -280,6 +302,21 @@ REQUIRE_OBJECT ( ntp_cmd );
 #endif
 #ifdef CERT_CMD
 REQUIRE_OBJECT ( cert_cmd );
+#endif
+#ifdef IMAGE_MEM_CMD
+REQUIRE_OBJECT ( image_mem_cmd );
+#endif
+#ifdef SHIM_CMD
+REQUIRE_OBJECT ( shim_cmd );
+#endif
+#ifdef IMAGE_CRYPT_CMD
+REQUIRE_OBJECT ( image_crypt_cmd );
+#endif
+#ifdef FDT_CMD
+REQUIRE_OBJECT ( fdt_cmd );
+#endif
+#ifdef IMAGE_SET_CMD
+REQUIRE_OBJECT ( image_set_cmd );
 #endif
 
 /*
@@ -325,9 +362,6 @@ REQUIRE_OBJECT ( efi_bofm );
 /*
  * Drag in relevant settings sources
  */
-#ifdef PCI_SETTINGS
-REQUIRE_OBJECT ( pci_settings );
-#endif
 #ifdef VMWARE_SETTINGS
 REQUIRE_OBJECT ( guestinfo );
 #endif
@@ -342,6 +376,9 @@ REQUIRE_OBJECT ( vram_settings );
 #endif
 #ifdef ACPI_SETTINGS
 REQUIRE_OBJECT ( acpi_settings );
+#endif
+#ifdef EFI_SETTINGS
+REQUIRE_OBJECT ( efi_settings );
 #endif
 
 /*

@@ -34,6 +34,13 @@
 #define ADVERTISED_Autoneg              (1 << 6)
 /* </ethtool.h> */
 
+#ifndef ADVERTISED_Pause
+#define ADVERTISED_Pause                (1 << 13)
+#endif
+#ifndef ADVERTISED_Asym_Pause
+#define ADVERTISED_Asym_Pause           (1 << 14)
+#endif
+
 /* mdio.h: */
 #define MDIO_AN_EEE_ADV		60      /* EEE advertisement */
 
@@ -139,9 +146,15 @@
 #define SPEED_10			10
 #define SPEED_100			100
 #define SPEED_1000			1000
+#ifndef SPEED_UNKNOWN
+#define SPEED_UNKNOWN                   -1
+#endif
 
 #define DUPLEX_HALF			0x00
 #define DUPLEX_FULL			0x01
+#ifndef DUPLEX_UNKNOWN
+#define DUPLEX_UNKNOWN                  0xff
+#endif
 
 #define TG3_64BIT_REG_HIGH		0x00UL
 #define TG3_64BIT_REG_LOW		0x04UL
@@ -2425,6 +2438,14 @@
 #define MII_TG3_FET_SHDW_AUXSTAT2	0x1b
 #define  MII_TG3_FET_SHDW_AUXSTAT2_APD	0x0020
 
+/* Serdes PHY Register Definitions */
+#define SERDES_TG3_1000X_STATUS         0x14
+#define SERDES_TG3_SGMII_MODE           0x0001
+#define SERDES_TG3_LINK_UP              0x0002
+#define SERDES_TG3_FULL_DUPLEX          0x0004
+#define SERDES_TG3_SPEED_100            0x0008
+#define SERDES_TG3_SPEED_1000           0x0010
+
 
 /* APE registers.  Accessible through BAR1 */
 #define TG3_APE_EVENT			0x000c
@@ -2788,8 +2809,6 @@ struct tg3_hw_stats {
 	u8				__reserved4[0xb00-0x9c8];
 };
 
-typedef unsigned long dma_addr_t;
-
 /* 'mapping' is superfluous as the chip does not write into
  * the tx/rx post rings so we could just fetch it from there.
  * But the cache behavior is better how we are doing it now.
@@ -2815,6 +2834,7 @@ struct tg3_link_config {
 #define DUPLEX_INVALID		0xff
 #define AUTONEG_INVALID		0xff
 	u16				active_speed;
+	u32				rmt_adv;
 
 	/* When we go in and out of low power mode we need
 	 * to swap with this state.
@@ -2932,7 +2952,7 @@ struct tg3_rx_prodring_set {
 	u32				rx_std_iob_cnt;
 	struct tg3_rx_buffer_desc	*rx_std;
 	struct io_buffer		*rx_iobufs[TG3_DEF_RX_RING_PENDING];
-	dma_addr_t			rx_std_mapping;
+	struct dma_mapping		rx_std_map;
 };
 
 #define TG3_IRQ_MAX_VECS_RSS		5
@@ -3068,6 +3088,7 @@ struct tg3 {
 	void				*regs;
 	struct net_device		*dev;
 	struct pci_device		*pdev;
+	struct dma_device		*dma;
 
 	u32				msg_enable;
 
@@ -3103,9 +3124,9 @@ struct tg3 {
 	struct tg3_tx_buffer_desc	*tx_ring;
 	struct ring_info		*tx_buffers;
 
-	dma_addr_t			status_mapping;
-	dma_addr_t			rx_rcb_mapping;
-	dma_addr_t			tx_desc_mapping;
+	struct dma_mapping		status_map;
+	struct dma_mapping		rx_rcb_map;
+	struct dma_mapping		tx_desc_map;
 	/* end tg3_napi */
 
 	/* begin "everything else" cacheline(s) section */
@@ -3282,6 +3303,7 @@ struct tg3 {
 
 	u16				subsystem_vendor;
 	u16				subsystem_device;
+	int				link_up;
 };
 
 #define TG3_TX_RING_SIZE		512
@@ -3348,7 +3370,7 @@ static inline void _tg3_flag_clear(enum TG3_FLAGS flag, unsigned long *bits)
 
 /* tg3_main.c forward declarations */
 int tg3_init_rings(struct tg3 *tp);
-void tg3_rx_prodring_fini(struct tg3_rx_prodring_set *tpr);
+void tg3_rx_prodring_fini(struct tg3 *tp, struct tg3_rx_prodring_set *tpr);
 ///int tg3_rx_prodring_init(struct tg3 *tp, struct tg3_rx_prodring_set *tpr);
 
 /* tg3_phy.c forward declarations */
@@ -3367,7 +3389,7 @@ int tg3_get_invariants(struct tg3 *tp);
 void tg3_init_bufmgr_config(struct tg3 *tp);
 int tg3_get_device_address(struct tg3 *tp);
 int tg3_halt(struct tg3 *tp);
-void tg3_set_txd(struct tg3 *tp, int entry, dma_addr_t mapping, int len, u32 flags);
+void tg3_set_txd(struct tg3 *tp, int entry, physaddr_t mapping, int len, u32 flags);
 void tg3_set_power_state_0(struct tg3 *tp);
 int tg3_alloc_consistent(struct tg3 *tp);
 int tg3_init_hw(struct tg3 *tp, int reset_phy);
@@ -3409,6 +3431,39 @@ static inline u8 mii_resolve_flowctrl_fdx(u16 lcladv, u16 rmtadv)
 
 	return cap;
 }
+
+static inline u32 mii_adv_to_ethtool_adv_x(u32 adv)
+{
+	u32 result = 0;
+
+	if (adv & ADVERTISE_1000XHALF)
+		result |= ADVERTISED_1000baseT_Half;
+	if (adv & ADVERTISE_1000XFULL)
+		result |= ADVERTISED_1000baseT_Full;
+	if (adv & ADVERTISE_1000XPAUSE)
+		result |= ADVERTISED_Pause;
+	if (adv & ADVERTISE_1000XPSE_ASYM)
+		result |= ADVERTISED_Asym_Pause;
+
+	return result;
+}
+
+static inline u32 ethtool_adv_to_mii_adv_x(u32 ethadv)
+{
+	u32 result = 0;
+
+	if (ethadv & ADVERTISED_1000baseT_Half)
+		result |= ADVERTISE_1000XHALF;
+	if (ethadv & ADVERTISED_1000baseT_Full)
+		result |= ADVERTISE_1000XFULL;
+	if (ethadv & ADVERTISED_Pause)
+		result |= ADVERTISE_1000XPAUSE;
+	if (ethadv & ADVERTISED_Asym_Pause)
+		result |= ADVERTISE_1000XPSE_ASYM;
+
+	return result;
+}
+
 
 #define ETH_FCS_LEN 4
 

@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <string.h>
@@ -54,6 +55,12 @@ struct vlan_device {
 	/** Default priority */
 	unsigned int priority;
 };
+
+/** Automatic VLAN device link-layer address */
+static uint8_t vlan_auto_ll_addr[ETH_ALEN];
+
+/** Automatic VLAN tag */
+static unsigned int vlan_auto_tag;
 
 /**
  * Open VLAN device
@@ -226,7 +233,7 @@ struct net_device * vlan_find ( struct net_device *trunk, unsigned int tag ) {
 static int vlan_rx ( struct io_buffer *iobuf, struct net_device *trunk,
 		     const void *ll_dest, const void *ll_source,
 		     unsigned int flags __unused ) {
-	struct vlan_header *vlanhdr = iobuf->data;
+	struct vlan_header *vlanhdr;
 	struct net_device *netdev;
 	struct ll_protocol *ll_protocol;
 	uint8_t ll_dest_copy[ETH_ALEN];
@@ -241,6 +248,7 @@ static int vlan_rx ( struct io_buffer *iobuf, struct net_device *trunk,
 		rc = -EINVAL;
 		goto err_sanity;
 	}
+	vlanhdr = iobuf->data;
 
 	/* Identify VLAN device */
 	tag = VLAN_TAG ( ntohs ( vlanhdr->tci ) );
@@ -287,17 +295,17 @@ struct net_protocol vlan_protocol __net_protocol = {
 };
 
 /**
- * Get the VLAN tag
+ * Get the VLAN tag control information
  *
  * @v netdev		Network device
- * @ret tag		VLAN tag, or 0 if device is not a VLAN device
+ * @ret tci		VLAN tag control information, or 0 if not a VLAN device
  */
-unsigned int vlan_tag ( struct net_device *netdev ) {
+unsigned int vlan_tci ( struct net_device *netdev ) {
 	struct vlan_device *vlan;
 
 	if ( netdev->op == &vlan_operations ) {
 		vlan = netdev->priv;
-		return vlan->tag;
+		return ( VLAN_TCI ( vlan->tag, vlan->priority ) );
 	} else {
 		return 0;
 	}
@@ -448,11 +456,54 @@ int vlan_destroy ( struct net_device *netdev ) {
 }
 
 /**
+ * Configure automatic VLAN device
+ *
+ * @v ll_addr		Link-layer address
+ * @v tag		VLAN tag
+ */
+void vlan_auto ( const void *ll_addr, unsigned int tag ) {
+
+	/* Record link-layer address and VLAN tag */
+	memcpy ( vlan_auto_ll_addr, ll_addr, ETH_ALEN );
+	vlan_auto_tag = tag;
+}
+
+/**
+ * Create automatic VLAN device
+ *
+ * @v trunk		Trunk network device
+ * @v priv		Private data
+ * @ret rc		Return status code
+ */
+static int vlan_probe ( struct net_device *trunk, void *priv __unused ) {
+	int rc;
+
+	/* Do nothing unless an automatic VLAN exists */
+	if ( ! vlan_auto_tag )
+		return 0;
+
+	/* Ignore non-trunk devices */
+	if ( ! vlan_can_be_trunk ( trunk ) )
+		return 0;
+
+	/* Ignore non-matching link-layer addresses */
+	if ( memcmp ( trunk->ll_addr, vlan_auto_ll_addr, ETH_ALEN ) != 0 )
+		return 0;
+
+	/* Create automatic VLAN device */
+	if ( ( rc = vlan_create ( trunk, vlan_auto_tag, 0 ) ) != 0 )
+		return rc;
+
+	return 0;
+}
+
+/**
  * Handle trunk network device link state change
  *
  * @v trunk		Trunk network device
+ * @v priv		Private data
  */
-static void vlan_notify ( struct net_device *trunk ) {
+static void vlan_notify ( struct net_device *trunk, void *priv __unused ) {
 	struct net_device *netdev;
 	struct vlan_device *vlan;
 
@@ -491,8 +542,9 @@ static int vlan_remove_first ( struct net_device *trunk ) {
  * Destroy all VLAN devices for a given trunk
  *
  * @v trunk		Trunk network device
+ * @v priv		Private data
  */
-static void vlan_remove ( struct net_device *trunk ) {
+static void vlan_remove ( struct net_device *trunk, void *priv __unused ) {
 
 	/* Remove all VLAN devices attached to this trunk, safe
 	 * against arbitrary net device removal.
@@ -503,6 +555,51 @@ static void vlan_remove ( struct net_device *trunk ) {
 /** VLAN driver */
 struct net_driver vlan_driver __net_driver = {
 	.name = "VLAN",
+	.probe = vlan_probe,
 	.notify = vlan_notify,
 	.remove = vlan_remove,
 };
+
+/**
+ * Add VLAN tag-stripped packet to receive queue
+ *
+ * @v netdev		Network device
+ * @v tag		VLAN tag, or zero
+ * @v iobuf		I/O buffer
+ */
+void vlan_netdev_rx ( struct net_device *netdev, unsigned int tag,
+		      struct io_buffer *iobuf ) {
+	struct net_device *vlan;
+
+	/* Identify VLAN device, if applicable */
+	if ( tag ) {
+		if ( ( vlan = vlan_find ( netdev, tag ) ) == NULL ) {
+			netdev_rx_err ( netdev, iobuf, -ENODEV );
+			return;
+		}
+		netdev = vlan;
+	}
+
+	/* Hand off to network device */
+	netdev_rx ( netdev, iobuf );
+}
+
+/**
+ * Discard received VLAN tag-stripped packet
+ *
+ * @v netdev		Network device
+ * @v tag		VLAN tag, or zero
+ * @v iobuf		I/O buffer, or NULL
+ * @v rc		Packet status code
+ */
+void vlan_netdev_rx_err ( struct net_device *netdev, unsigned int tag,
+			  struct io_buffer *iobuf, int rc ) {
+	struct net_device *vlan;
+
+	/* Identify VLAN device, if applicable */
+	if ( tag && ( ( vlan = vlan_find ( netdev, tag ) ) != NULL ) )
+		netdev = vlan;
+
+	/* Hand off to network device */
+	netdev_rx_err ( netdev, iobuf, rc );
+}

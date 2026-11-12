@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( BSD2 );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <byteswap.h>
@@ -774,7 +775,7 @@ struct srp_aer_rsp {
  * The working draft specification for the SRP boot firmware table can
  * be found at
  *
- *   http://ipxe.org/wiki/srp/sbft
+ *   https://ipxe.org/wiki/srp/sbft
  *
  *****************************************************************************
  */

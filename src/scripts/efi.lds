@@ -8,22 +8,22 @@
 SECTIONS {
 
     /* The file starts at a virtual address of zero, and sections are
-     * contiguous.  Each section is aligned to at least _max_align,
-     * which defaults to 32.  Load addresses are equal to virtual
+     * contiguous.  Each section is aligned to at least _page_align,
+     * which defaults to 4096.  Load addresses are equal to virtual
      * addresses.
      */
 
-    _max_align = 32;
+    _page_align = 4096;
 
-    /* Allow plenty of space for file headers */
-    . = 0x1000;
+    /* Allow one page of space for file headers, common PE/COFF layout */
+    . = _page_align;
 
     /*
      * The text section
      *
      */
 
-    . = ALIGN ( _max_align );
+    . = ALIGN ( _page_align );
     .text : {
 	_text = .;
 	*(.text)
@@ -36,9 +36,13 @@ SECTIONS {
      *
      */
 
-    . = ALIGN ( _max_align );
+    . = ALIGN ( _page_align );
     .rodata : {
 	_rodata = .;
+	KEEP(*(.debugdir))
+	KEEP(*(.debugdir.*))
+	*(.srodata)
+	*(.srodata.*)
 	*(.rodata)
 	*(.rodata.*)
 	_erodata = .;
@@ -49,9 +53,11 @@ SECTIONS {
      *
      */
 
-    . = ALIGN ( _max_align );
+    . = ALIGN ( _page_align );
     .data : {
 	_data = .;
+	*(.sdata)
+	*(.sdata.*)
 	*(.data)
 	*(.data.*)
 	KEEP(*(SORT(.tbl.*)))	/* Various tables.  See include/tables.h */
@@ -65,13 +71,41 @@ SECTIONS {
      *
      */
 
-    . = ALIGN ( _max_align );
+    . = ALIGN ( _page_align );
     .bss : {
 	_bss = .;
+	*(.sbss)
+	*(.sbss.*)
 	*(.bss)
 	*(.bss.*)
 	*(COMMON)
 	_ebss = .;
+    }
+
+    /*
+     * The SBAT section
+     *
+     */
+
+    . = ALIGN ( _page_align );
+    .sbat : {
+	_sbat = .;
+	KEEP(*(.sbat))
+	KEEP(*(.sbat.*))
+	_esbat = .;
+    }
+
+    /*
+     * The SBOM section
+     *
+     */
+
+    . = ALIGN ( _page_align );
+    .sbom : {
+	_sbom = .;
+	KEEP(*(.sbom))
+	KEEP(*(.sbom.*))
+	_esbom = .;
     }
 
     /*
@@ -86,6 +120,16 @@ SECTIONS {
 	_eweak = .;
     }
     _assert = ASSERT ( ( _weak == _eweak ), ".weak is non-zero length" );
+
+    /*
+     * iPXE-specific note sections
+     *
+     */
+
+    .note : {
+	*(.note.ipxe)
+	*(.note.ipxe.*)
+    }
 
     /*
      * Dispose of the comment and note sections to make the link map
@@ -106,5 +150,6 @@ SECTIONS {
 	*(.einfo.*)
 	*(.discard)
 	*(.discard.*)
+	*(.pci_devlist.*)
     }
 }

@@ -22,11 +22,13 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <ctype.h>
 
 /** @file
@@ -52,7 +54,7 @@ void * generic_memset ( void *dest, int character, size_t len ) {
 }
 
 /**
- * Copy memory region
+ * Copy memory region (forwards)
  *
  * @v dest		Destination region
  * @v src		Source region
@@ -69,6 +71,23 @@ void * generic_memcpy ( void *dest, const void *src, size_t len ) {
 }
 
 /**
+ * Copy memory region (backwards)
+ *
+ * @v dest		Destination region
+ * @v src		Source region
+ * @v len		Length
+ * @ret dest		Destination region
+ */
+void * generic_memcpy_reverse ( void *dest, const void *src, size_t len ) {
+	const uint8_t *src_bytes = ( src + len );
+	uint8_t *dest_bytes = ( dest + len );
+
+	while ( len-- )
+		*(--dest_bytes) = *(--src_bytes);
+	return dest;
+}
+
+/**
  * Copy (possibly overlapping) memory region
  *
  * @v dest		Destination region
@@ -77,14 +96,12 @@ void * generic_memcpy ( void *dest, const void *src, size_t len ) {
  * @ret dest		Destination region
  */
 void * generic_memmove ( void *dest, const void *src, size_t len ) {
-	const uint8_t *src_bytes = ( src + len );
-	uint8_t *dest_bytes = ( dest + len );
 
-	if ( dest < src )
+	if ( dest < src ) {
 		return generic_memcpy ( dest, src, len );
-	while ( len-- )
-		*(--dest_bytes) = *(--src_bytes);
-	return dest;
+	} else {
+		return generic_memcpy_reverse ( dest, src, len );
+	}
 }
 
 /**
@@ -101,7 +118,7 @@ int memcmp ( const void *first, const void *second, size_t len ) {
 	int diff;
 
 	while ( len-- ) {
-		diff = ( *(second_bytes++) - *(first_bytes++) );
+		diff = ( *(first_bytes++) - *(second_bytes++) );
 		if ( diff )
 			return diff;
 	}
@@ -173,7 +190,7 @@ int strncmp ( const char *first, const char *second, size_t max ) {
 	int diff;
 
 	for ( ; max-- ; first_bytes++, second_bytes++ ) {
-		diff = ( *second_bytes - *first_bytes );
+		diff = ( *first_bytes - *second_bytes );
 		if ( diff )
 			return diff;
 		if ( ! *first_bytes )
@@ -190,18 +207,32 @@ int strncmp ( const char *first, const char *second, size_t max ) {
  * @ret diff		Difference
  */
 int strcasecmp ( const char *first, const char *second ) {
+
+	return strncasecmp ( first, second, ~( ( size_t ) 0 ) );
+}
+
+/**
+ * Compare case-insensitive strings
+ *
+ * @v first		First string
+ * @v second		Second string
+ * @v max		Maximum length to compare
+ * @ret diff		Difference
+ */
+int strncasecmp ( const char *first, const char *second, size_t max ) {
 	const uint8_t *first_bytes = ( ( const uint8_t * ) first );
 	const uint8_t *second_bytes = ( ( const uint8_t * ) second );
 	int diff;
 
-	for ( ; ; first_bytes++, second_bytes++ ) {
-		diff = ( toupper ( *second_bytes ) -
-			 toupper ( *first_bytes ) );
+	for ( ; max-- ; first_bytes++, second_bytes++ ) {
+		diff = ( toupper ( *first_bytes ) -
+			 toupper ( *second_bytes ) );
 		if ( diff )
 			return diff;
 		if ( ! *first_bytes )
 			return 0;
 	}
+	return 0;
 }
 
 /**
@@ -232,6 +263,22 @@ size_t strnlen ( const char *src, size_t max ) {
 }
 
 /**
+ * Find character within a string, or NUL terminator
+ *
+ * @v src		String
+ * @v character		Character to find
+ * @ret found		Found character, or terminating NUL if not found
+ */
+char * strchrnul ( const char *src, int character ) {
+	const uint8_t *src_bytes = ( ( const uint8_t * ) src );
+
+	for ( ; ; src_bytes++ ) {
+		if ( ( *src_bytes == character ) || ( ! *src_bytes ) )
+			return ( ( char * ) src_bytes );
+	}
+}
+
+/**
  * Find character within a string
  *
  * @v src		String
@@ -239,14 +286,12 @@ size_t strnlen ( const char *src, size_t max ) {
  * @ret found		Found character, or NULL if not found
  */
 char * strchr ( const char *src, int character ) {
-	const uint8_t *src_bytes = ( ( const uint8_t * ) src );
+	char *found;
 
-	for ( ; ; src_bytes++ ) {
-		if ( *src_bytes == character )
-			return ( ( char * ) src_bytes );
-		if ( ! *src_bytes )
-			return NULL;
-	}
+	found = strchrnul ( src, character );
+	if ( character != *( ( uint8_t * ) found ) )
+		return NULL;
+	return found;
 }
 
 /**
@@ -287,13 +332,30 @@ char * strstr ( const char *haystack, const char *needle ) {
 }
 
 /**
+ * Find case-insensitive substring
+ *
+ * @v haystack		String
+ * @v needle		Substring
+ * @ret found		Found substring, or NULL if not found
+ */
+char * strcasestr ( const char *haystack, const char *needle ) {
+	size_t len = strlen ( needle );
+
+	for ( ; *haystack ; haystack++ ) {
+		if ( strncasecmp ( haystack, needle, len ) == 0 )
+			return ( ( char * ) haystack );
+	}
+	return NULL;
+}
+
+/**
  * Copy string
  *
  * @v dest		Destination string
  * @v src		Source string
- * @ret dest		Destination string
+ * @ret dnul		Terminating NUL of destination string
  */
-char * strcpy ( char *dest, const char *src ) {
+char * stpcpy ( char *dest, const char *src ) {
 	const uint8_t *src_bytes = ( ( const uint8_t * ) src );
 	uint8_t *dest_bytes = ( ( uint8_t * ) dest );
 
@@ -303,6 +365,19 @@ char * strcpy ( char *dest, const char *src ) {
 		if ( ! *dest_bytes )
 			break;
 	}
+	return ( ( char * ) dest_bytes );
+}
+
+/**
+ * Copy string
+ *
+ * @v dest		Destination string
+ * @v src		Source string
+ * @ret dest		Destination string
+ */
+char * strcpy ( char *dest, const char *src ) {
+
+	stpcpy ( dest, src );
 	return dest;
 }
 

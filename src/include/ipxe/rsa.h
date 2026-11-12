@@ -7,6 +7,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdarg.h>
 #include <ipxe/crypto.h>
@@ -55,31 +56,9 @@ struct rsa_digestinfo_prefix {
 /** Declare an RSA digestInfo prefix */
 #define __rsa_digestinfo_prefix __table_entry ( RSA_DIGESTINFO_PREFIXES, 01 )
 
-/** An RSA context */
-struct rsa_context {
-	/** Allocated memory */
-	void *dynamic;
-	/** Modulus */
-	bigint_element_t *modulus0;
-	/** Modulus size */
-	unsigned int size;
-	/** Modulus length */
-	size_t max_len;
-	/** Exponent */
-	bigint_element_t *exponent0;
-	/** Exponent size */
-	unsigned int exponent_size;
-	/** Input buffer */
-	bigint_element_t *input0;
-	/** Output buffer */
-	bigint_element_t *output0;
-	/** Temporary working space for modular exponentiation */
-	void *tmp;
-};
-
-/** RSA context size */
-#define RSA_CTX_SIZE sizeof ( struct rsa_context )
-
 extern struct pubkey_algorithm rsa_algorithm;
+extern struct pubkey_algorithm rsa_pss_algorithm;
+
+extern int ( * rsa_get_random ) ( void *data, size_t len );
 
 #endif /* _IPXE_RSA_H */

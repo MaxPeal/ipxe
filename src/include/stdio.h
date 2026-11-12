@@ -2,11 +2,12 @@
 #define _STDIO_H
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <stdarg.h>
 
-extern void putchar ( int character );
+extern int putchar ( int character );
 
 extern int getchar ( void );
 

@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <string.h>
@@ -32,7 +33,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/ethernet.h>
 #include <ipxe/if_ether.h>
 #include <ipxe/iobuf.h>
-#include <ipxe/malloc.h>
 #include <ipxe/pci.h>
 #include "intelx.h"
 
@@ -315,16 +315,12 @@ static void intelx_poll ( struct net_device *netdev ) {
 
 	/* Check for and acknowledge interrupts */
 	eicr = readl ( intel->regs + INTELX_EICR );
-	if ( ! eicr )
-		return;
 
-	/* Poll for TX completions, if applicable */
-	if ( eicr & INTELX_EIRQ_TX0 )
-		intel_poll_tx ( netdev );
+	/* Poll for TX completions */
+	intel_poll_tx ( netdev );
 
-	/* Poll for RX completions, if applicable */
-	if ( eicr & ( INTELX_EIRQ_RX0 | INTELX_EIRQ_RXO ) )
-		intel_poll_rx ( netdev );
+	/* Poll for RX completions */
+	intel_poll_rx ( netdev );
 
 	/* Report receive overruns */
 	if ( eicr & INTELX_EIRQ_RXO )
@@ -397,19 +393,24 @@ static int intelx_probe ( struct pci_device *pci ) {
 	memset ( intel, 0, sizeof ( *intel ) );
 	intel->port = PCI_FUNC ( pci->busdevfn );
 	intel_init_ring ( &intel->tx, INTEL_NUM_TX_DESC, INTELX_TD,
-			  intel_describe_tx );
+			  intel_describe_tx, intel_status_tx );
 	intel_init_ring ( &intel->rx, INTEL_NUM_RX_DESC, INTELX_RD,
-			  intel_describe_rx );
+			  intel_describe_rx, intel_status_rx );
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
 
 	/* Map registers */
-	intel->regs = ioremap ( pci->membase, INTEL_BAR_SIZE );
+	intel->regs = pci_ioremap ( pci, pci->membase, INTEL_BAR_SIZE );
 	if ( ! intel->regs ) {
 		rc = -ENODEV;
 		goto err_ioremap;
 	}
+
+	/* Configure DMA */
+	intel->dma = &pci->dma;
+	dma_set_mask_64bit ( intel->dma );
+	netdev->dma = intel->dma;
 
 	/* Reset the NIC */
 	if ( ( rc = intelx_reset ( intel ) ) != 0 )
@@ -465,14 +466,24 @@ static void intelx_remove ( struct pci_device *pci ) {
 /** PCI device IDs */
 static struct pci_device_id intelx_nics[] = {
 	PCI_ROM ( 0x8086, 0x10f7, "82599-kx4", "82599 (KX/KX4)", 0 ),
-	PCI_ROM ( 0x8086, 0x10f8, "82599-combo-backplane", "82599 (combined backplane; KR/KX4/KX)", 0 ),
+	PCI_ROM ( 0x8086, 0x10f8, "82599-combo-backplane",
+		  "82599 (combined backplane; KR/KX4/KX)", 0 ),
 	PCI_ROM ( 0x8086, 0x10f9, "82599-cx4", "82599 (CX4)", 0 ),
 	PCI_ROM ( 0x8086, 0x10fb, "82599-sfp", "82599 (SFI/SFP+)", 0 ),
 	PCI_ROM ( 0x8086, 0x10fc, "82599-xaui", "82599 (XAUI/BX4)", 0 ),
+	PCI_ROM ( 0x8086, 0x151c, "82599-tn", "82599 (TN)", 0 ),
 	PCI_ROM ( 0x8086, 0x1528, "x540t", "X540-AT2/X540-BT2", 0 ),
 	PCI_ROM ( 0x8086, 0x154d, "82599-sfp-sf2", "82599 (SFI/SFP+)", 0 ),
-	PCI_ROM ( 0x8086, 0x1557, "82599en-sfp", "82599 (Single Port SFI Only)", 0 ),
-	PCI_ROM ( 0x8086, 0x1560, "x540t1", "X540-AT2/X540-BT2 (with single port NVM)", 0 ),
+	PCI_ROM ( 0x8086, 0x1557, "82599en-sfp",
+		  "82599 (Single Port SFI Only)", 0 ),
+	PCI_ROM ( 0x8086, 0x1560, "x540t1",
+		  "X540-AT2/X540-BT2 (with single port NVM)", 0 ),
+	PCI_ROM ( 0x8086, 0x1563, "x550t2", "X550-T2", 0 ),
+	PCI_ROM ( 0x8086, 0x15ab, "x552", "X552", 0 ),
+	PCI_ROM ( 0x8086, 0x15c8, "x553t", "X553/X557-AT", 0 ),
+	PCI_ROM ( 0x8086, 0x15ce, "x553-sfp", "X553 (SFP+)", 0 ),
+	PCI_ROM ( 0x8086, 0x15e4, "x553a", "X553", 0 ),
+	PCI_ROM ( 0x8086, 0x15e5, "x553", "X553", 0 ),
 };
 
 /** PCI driver */

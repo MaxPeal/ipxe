@@ -10,6 +10,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/tcpip.h>
 
@@ -26,7 +27,7 @@ struct tcp_header {
 	uint16_t win;		/* Advertised window */
 	uint16_t csum;		/* Checksum */
 	uint16_t urg;		/* Urgent pointer */
-};
+} __attribute__ (( packed ));
 
 /** @defgroup tcpopts TCP options
  * @{
@@ -339,11 +340,17 @@ struct tcp_options {
  *    a) Gigabit LAN: expected bandwidth 125MB/s, typical RTT 0.5ms,
  *       minimum required window 64kB
  *
- *    b) Home Internet connection: expected bandwidth 10MB/s, typical
- *       RTT 25ms, minimum required window 256kB
+ *    b) 10-Gigabit LAN: expected bandwidth 1250MB/s, typical RTT
+ *       0.5ms, minimum required window 640kB
  *
- *    c) WAN: expected bandwidth 2MB/s, typical RTT 100ms, minimum
- *       required window 200kB.
+ *    c) Home Internet connection: expected bandwidth 50MB/s, typical
+ *       RTT 25ms, minimum required window 1280kB
+ *
+ *    d) International WAN: expected bandwidth 50MB/s, typical RTT
+ *       25ms, minimum required window 1280kB
+ *
+ *    e) Intercontinental WAN: expected bandwidth 5MB/s, typical RTT
+ *       250ms, minimum required window 1280kB.
  *
  * The maximum possible value for the TCP window size is 1GB (using
  * the maximum window scale of 2**14).  However, it is advisable to
@@ -351,9 +358,9 @@ struct tcp_options {
  * bandwidth), since in the event of a lost packet the window size
  * represents the maximum amount that will need to be retransmitted.
  *
- * We therefore choose a maximum window size of 256kB.
+ * We therefore choose a (rounded up) maximum window size of 2048kB.
  */
-#define TCP_MAX_WINDOW_SIZE	( 256 * 1024 )
+#define TCP_MAX_WINDOW_SIZE	( 2048 * 1024 )
 
 /**
  * Path MTU
@@ -433,6 +440,23 @@ static inline int tcp_in_window ( uint32_t seq, uint32_t start,
  */
 #define TCP_FINISH_TIMEOUT ( 1 * TICKS_PER_SEC )
 
+/** TCP statistics */
+struct tcp_statistics {
+	/** Number of packets received */
+	unsigned long in_segs;
+	/** Total number of packets discarded due to lack of memory */
+	unsigned long in_discards;
+	/** Total number of packets received out of order */
+	unsigned long in_out_of_order;
+
+	/** Number of octets received (including duplicate data) */
+	unsigned long in_octets;
+	/** Number of octets processed and passed to upper layer */
+	unsigned long in_octets_good;
+};
+
 extern struct tcpip_protocol tcp_protocol __tcpip_protocol;
+
+extern struct tcp_statistics tcp_stats;
 
 #endif /* _IPXE_TCP_H */

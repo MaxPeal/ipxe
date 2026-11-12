@@ -2,8 +2,8 @@
 #define _IPXE_SCSI_H
 
 #include <stdint.h>
-#include <ipxe/uaccess.h>
 #include <ipxe/interface.h>
+#include <ipxe/xferbuf.h>
 
 /** @file
  *
@@ -12,6 +12,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** Maximum block for READ/WRITE (10) commands */
 #define SCSI_MAX_BLOCK_10 0xffffffffULL
@@ -251,20 +252,10 @@ struct scsi_cmd {
 	struct scsi_lun lun;
 	/** CDB for this command */
 	union scsi_cdb cdb;
-	/** Data-out buffer (may be NULL) */
-	userptr_t data_out;
-	/** Data-out buffer length
-	 *
-	 * Must be zero if @c data_out is NULL
-	 */
-	size_t data_out_len;
-	/** Data-in buffer (may be NULL) */
-	userptr_t data_in;
-	/** Data-in buffer length
-	 *
-	 * Must be zero if @c data_in is NULL
-	 */
-	size_t data_in_len;
+	/** Data-out buffer */
+	struct xfer_buffer data_out;
+	/** Data-in buffer */
+	struct xfer_buffer data_in;
 };
 
 /** SCSI fixed-format sense data */

@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <string.h>
@@ -32,7 +33,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/ethernet.h>
 #include <ipxe/if_ether.h>
 #include <ipxe/iobuf.h>
-#include <ipxe/malloc.h>
+#include <ipxe/dma.h>
 #include <ipxe/pci.h>
 #include <ipxe/profile.h>
 #include "intel.h"
@@ -290,6 +291,18 @@ static int intel_reset ( struct intel_nic *intel ) {
 		       pba, readl ( intel->regs + INTEL_PBA ) );
 	}
 
+	/* The Intel I210's packet buffer size registers reset only on
+	 * power up.  If an operating system changes these but then
+	 * the computer recieves a reset signal without losing power,
+	 * the registers will stay the same (but be incompatible with
+	 * other register defaults), thus making the device unable to
+	 * pass traffic.
+	 */
+	if ( intel->flags & INTEL_PBSIZE_RST ) {
+		writel ( INTEL_RXPBS_I210, intel->regs + INTEL_RXPBS );
+		writel ( INTEL_TXPBS_I210, intel->regs + INTEL_TXPBS );
+	}
+
 	/* Always reset MAC.  Required to reset the TX and RX rings. */
 	writel ( ( ctrl | INTEL_CTRL_RST ), intel->regs + INTEL_CTRL );
 	mdelay ( INTEL_RESET_DELAY_MS );
@@ -385,11 +398,11 @@ void intel_describe_tx ( struct intel_descriptor *tx, physaddr_t addr,
 
 	/* Populate transmit descriptor */
 	tx->address = cpu_to_le64 ( addr );
-	tx->length = cpu_to_le16 ( len );
-	tx->flags = 0;
-	tx->command = ( INTEL_DESC_CMD_RS | INTEL_DESC_CMD_IFCS |
-			INTEL_DESC_CMD_EOP );
-	tx->status = 0;
+	tx->std.length = cpu_to_le16 ( len );
+	tx->std.flags = 0;
+	tx->std.command = ( INTEL_DESC_CMD_RS | INTEL_DESC_CMD_IFCS |
+			    INTEL_DESC_CMD_EOP );
+	tx->std.status = 0;
 }
 
 /**
@@ -404,11 +417,11 @@ void intel_describe_tx_adv ( struct intel_descriptor *tx, physaddr_t addr,
 
 	/* Populate advanced transmit descriptor */
 	tx->address = cpu_to_le64 ( addr );
-	tx->length = cpu_to_le16 ( len );
-	tx->flags = INTEL_DESC_FL_DTYP_DATA;
-	tx->command = ( INTEL_DESC_CMD_DEXT | INTEL_DESC_CMD_RS |
-			INTEL_DESC_CMD_IFCS | INTEL_DESC_CMD_EOP );
-	tx->status = cpu_to_le32 ( INTEL_DESC_STATUS_PAYLEN ( len ) );
+	tx->std.length = cpu_to_le16 ( len );
+	tx->std.flags = INTEL_DESC_FL_DTYP_DATA;
+	tx->std.command = ( INTEL_DESC_CMD_DEXT | INTEL_DESC_CMD_RS |
+			    INTEL_DESC_CMD_IFCS | INTEL_DESC_CMD_EOP );
+	tx->std.status = cpu_to_le32 ( INTEL_DESC_STATUS_PAYLEN ( len ) );
 }
 
 /**
@@ -421,10 +434,59 @@ void intel_describe_tx_adv ( struct intel_descriptor *tx, physaddr_t addr,
 void intel_describe_rx ( struct intel_descriptor *rx, physaddr_t addr,
 			 size_t len __unused ) {
 
-	/* Populate transmit descriptor */
+	/* Populate receive descriptor */
 	rx->address = cpu_to_le64 ( addr );
-	rx->length = 0;
-	rx->status = 0;
+	rx->unused = 0;
+}
+
+/**
+ * Get transmit descriptor status
+ *
+ * @v tx		Transmit descriptor
+ * @v len		Completed length to fill in
+ * @ret status		Descriptor status
+ */
+uint32_t intel_status_tx ( struct intel_descriptor *tx,
+			   size_t *len __unused ) {
+
+	/* Get transmit descriptor status */
+	return le32_to_cpu ( tx->std.status );
+}
+
+/**
+ * Get receive descriptor status
+ *
+ * @v rx		Receive descriptor
+ * @v len		Completed length to fill in
+ * @ret status		Descriptor status
+ */
+uint32_t intel_status_rx ( struct intel_descriptor *rx, size_t *len ) {
+	uint32_t status;
+
+	/* Get receive descriptor status */
+	*len = le16_to_cpu ( rx->std.length );
+	status = ( le32_to_cpu ( rx->std.status ) &
+		   ( INTEL_DESC_STATUS_DD | INTEL_DESC_STATUS_EOP |
+		     INTEL_DESC_STATUS_RXE ) );
+	return status;
+}
+
+/**
+ * Get advanced receive descriptor status
+ *
+ * @v rx		Receive descriptor
+ * @v len		Completed length to fill in
+ * @ret status		Descriptor status
+ */
+uint32_t intel_status_rx_adv ( struct intel_descriptor *rx, size_t *len ) {
+	uint32_t status;
+
+	/* Get receive descriptor status */
+	*len = le16_to_cpu ( rx->rx_adv.length );
+	status = ( le32_to_cpu ( rx->rx_adv.status ) &
+		   ( INTEL_DESC_STATUS_DD | INTEL_DESC_STATUS_EOP |
+		     INTEL_DESC_STATUS_ADV_RXE ) );
+	return status;
 }
 
 /******************************************************************************
@@ -483,10 +545,6 @@ void intel_reset_ring ( struct intel_nic *intel, unsigned int reg ) {
 	/* Clear ring address */
 	writel ( 0, ( intel->regs + reg + INTEL_xDBAH ) );
 	writel ( 0, ( intel->regs + reg + INTEL_xDBAL ) );
-
-	/* Reset head and tail pointers */
-	writel ( 0, ( intel->regs + reg + INTEL_xDH ) );
-	writel ( 0, ( intel->regs + reg + INTEL_xDT ) );
 }
 
 /**
@@ -504,7 +562,8 @@ int intel_create_ring ( struct intel_nic *intel, struct intel_ring *ring ) {
 	 * prevent any possible page-crossing errors due to hardware
 	 * errata.
 	 */
-	ring->desc = malloc_dma ( ring->len, ring->len );
+	ring->desc = dma_alloc ( intel->dma, &ring->map, ring->len,
+				 ring->len );
 	if ( ! ring->desc )
 		return -ENOMEM;
 
@@ -512,7 +571,7 @@ int intel_create_ring ( struct intel_nic *intel, struct intel_ring *ring ) {
 	memset ( ring->desc, 0, ring->len );
 
 	/* Program ring address */
-	address = virt_to_bus ( ring->desc );
+	address = dma ( &ring->map, ring->desc );
 	writel ( ( address & 0xffffffffUL ),
 		 ( intel->regs + ring->reg + INTEL_xDBAL ) );
 	if ( sizeof ( physaddr_t ) > sizeof ( uint32_t ) ) {
@@ -534,9 +593,9 @@ int intel_create_ring ( struct intel_nic *intel, struct intel_ring *ring ) {
 	dctl |= INTEL_xDCTL_ENABLE;
 	writel ( dctl, intel->regs + ring->reg + INTEL_xDCTL );
 
-	DBGC ( intel, "INTEL %p ring %05x is at [%08llx,%08llx)\n",
-	       intel, ring->reg, ( ( unsigned long long ) address ),
-	       ( ( unsigned long long ) address + ring->len ) );
+	DBGC ( intel, "INTEL %p ring %05x is at [%08lx,%08lx)\n",
+	       intel, ring->reg, virt_to_phys ( ring->desc ),
+	       ( virt_to_phys ( ring->desc ) + ring->len ) );
 
 	return 0;
 }
@@ -553,7 +612,7 @@ void intel_destroy_ring ( struct intel_nic *intel, struct intel_ring *ring ) {
 	intel_reset_ring ( intel, ring->reg );
 
 	/* Free descriptor ring */
-	free_dma ( ring->desc, ring->len );
+	dma_free ( &ring->map, ring->desc, ring->len );
 	ring->desc = NULL;
 	ring->prod = 0;
 	ring->cons = 0;
@@ -569,14 +628,13 @@ void intel_refill_rx ( struct intel_nic *intel ) {
 	struct io_buffer *iobuf;
 	unsigned int rx_idx;
 	unsigned int rx_tail;
-	physaddr_t address;
 	unsigned int refilled = 0;
 
 	/* Refill ring */
 	while ( ( intel->rx.prod - intel->rx.cons ) < INTEL_RX_FILL ) {
 
 		/* Allocate I/O buffer */
-		iobuf = alloc_iob ( INTEL_RX_MAX_LEN );
+		iobuf = alloc_rx_iob ( INTEL_RX_MAX_LEN, intel->dma );
 		if ( ! iobuf ) {
 			/* Wait for next refill */
 			break;
@@ -587,16 +645,15 @@ void intel_refill_rx ( struct intel_nic *intel ) {
 		rx = &intel->rx.desc[rx_idx];
 
 		/* Populate receive descriptor */
-		address = virt_to_bus ( iobuf->data );
-		intel->rx.describe ( rx, address, 0 );
+		intel->rx.describe ( rx, iob_dma ( iobuf ), 0 );
 
 		/* Record I/O buffer */
 		assert ( intel->rx_iobuf[rx_idx] == NULL );
 		intel->rx_iobuf[rx_idx] = iobuf;
 
-		DBGC2 ( intel, "INTEL %p RX %d is [%llx,%llx)\n", intel, rx_idx,
-			( ( unsigned long long ) address ),
-			( ( unsigned long long ) address + INTEL_RX_MAX_LEN ) );
+		DBGC2 ( intel, "INTEL %p RX %d is [%lx,%lx)\n",
+			intel, rx_idx, virt_to_phys ( iobuf->data ),
+			( virt_to_phys ( iobuf->data ) + INTEL_RX_MAX_LEN ) );
 		refilled++;
 	}
 
@@ -619,9 +676,10 @@ void intel_refill_rx ( struct intel_nic *intel ) {
 void intel_empty_rx ( struct intel_nic *intel ) {
 	unsigned int i;
 
+	/* Discard unused receive buffers */
 	for ( i = 0 ; i < INTEL_NUM_RX_DESC ; i++ ) {
 		if ( intel->rx_iobuf[i] )
-			free_iob ( intel->rx_iobuf[i] );
+			free_rx_iob ( intel->rx_iobuf[i] );
 		intel->rx_iobuf[i] = NULL;
 	}
 }
@@ -635,9 +693,22 @@ void intel_empty_rx ( struct intel_nic *intel ) {
 static int intel_open ( struct net_device *netdev ) {
 	struct intel_nic *intel = netdev->priv;
 	union intel_receive_address mac;
+	uint32_t fextnvm11;
 	uint32_t tctl;
 	uint32_t rctl;
 	int rc;
+
+	/* Set undocumented bit in FEXTNVM11 to work around an errata
+	 * in i219 devices that will otherwise cause a complete
+	 * datapath hang at the next device reset.
+	 */
+	if ( intel->flags & INTEL_RST_HANG ) {
+		DBGC ( intel, "INTEL %p WARNING: applying reset hang "
+		       "workaround\n", intel );
+		fextnvm11 = readl ( intel->regs + INTEL_FEXTNVM11 );
+		fextnvm11 |= INTEL_FEXTNVM11_WTF;
+		writel ( fextnvm11, intel->regs + INTEL_FEXTNVM11 );
+	}
 
 	/* Create transmit descriptor ring */
 	if ( ( rc = intel_create_ring ( intel, &intel->tx ) ) != 0 )
@@ -673,13 +744,6 @@ static int intel_open ( struct net_device *netdev ) {
 
 	/* Update link state */
 	intel_check_link ( netdev );
-
-	/* Apply required errata */
-	if ( intel->flags & INTEL_VMWARE ) {
-		DBGC ( intel, "INTEL %p applying VMware errata workaround\n",
-		       intel );
-		intel->force_icr = INTEL_IRQ_RXT0;
-	}
 
 	return 0;
 
@@ -729,7 +793,6 @@ int intel_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	struct intel_descriptor *tx;
 	unsigned int tx_idx;
 	unsigned int tx_tail;
-	physaddr_t address;
 	size_t len;
 
 	/* Get next transmit descriptor */
@@ -742,9 +805,8 @@ int intel_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	tx = &intel->tx.desc[tx_idx];
 
 	/* Populate transmit descriptor */
-	address = virt_to_bus ( iobuf->data );
 	len = iob_len ( iobuf );
-	intel->tx.describe ( tx, address, len );
+	intel->tx.describe ( tx, iob_dma ( iobuf ), len );
 	wmb();
 
 	/* Notify card that there are packets ready to transmit */
@@ -753,9 +815,9 @@ int intel_transmit ( struct net_device *netdev, struct io_buffer *iobuf ) {
 	profile_stop ( &intel_vm_tx_profiler );
 	profile_exclude ( &intel_vm_tx_profiler );
 
-	DBGC2 ( intel, "INTEL %p TX %d is [%llx,%llx)\n", intel, tx_idx,
-		( ( unsigned long long ) address ),
-		( ( unsigned long long ) address + len ) );
+	DBGC2 ( intel, "INTEL %p TX %d is [%lx,%lx)\n",
+		intel, tx_idx, virt_to_phys ( iobuf->data ),
+		( virt_to_phys ( iobuf->data ) + len ) );
 
 	return 0;
 }
@@ -769,6 +831,8 @@ void intel_poll_tx ( struct net_device *netdev ) {
 	struct intel_nic *intel = netdev->priv;
 	struct intel_descriptor *tx;
 	unsigned int tx_idx;
+	uint32_t status;
+	size_t len;
 
 	/* Check for completed packets */
 	while ( intel->tx.cons != intel->tx.prod ) {
@@ -778,9 +842,9 @@ void intel_poll_tx ( struct net_device *netdev ) {
 		tx = &intel->tx.desc[tx_idx];
 
 		/* Stop if descriptor is still in use */
-		if ( ! ( tx->status & cpu_to_le32 ( INTEL_DESC_STATUS_DD ) ) )
+		status = intel->tx.status ( tx, &len );
+		if ( ! ( status & INTEL_DESC_STATUS_DD ) )
 			return;
-
 		DBGC2 ( intel, "INTEL %p TX %d complete\n", intel, tx_idx );
 
 		/* Complete TX descriptor */
@@ -799,6 +863,7 @@ void intel_poll_rx ( struct net_device *netdev ) {
 	struct intel_descriptor *rx;
 	struct io_buffer *iobuf;
 	unsigned int rx_idx;
+	uint32_t status;
 	size_t len;
 
 	/* Check for received packets */
@@ -809,20 +874,21 @@ void intel_poll_rx ( struct net_device *netdev ) {
 		rx = &intel->rx.desc[rx_idx];
 
 		/* Stop if descriptor is still in use */
-		if ( ! ( rx->status & cpu_to_le32 ( INTEL_DESC_STATUS_DD ) ) )
+		status = intel->rx.status ( rx, &len );
+		if ( ! ( status & INTEL_DESC_STATUS_DD ) )
 			return;
+		status &= ~INTEL_DESC_STATUS_DD;
 
 		/* Populate I/O buffer */
 		iobuf = intel->rx_iobuf[rx_idx];
 		intel->rx_iobuf[rx_idx] = NULL;
-		len = le16_to_cpu ( rx->length );
 		iob_put ( iobuf, len );
 
 		/* Hand off to network stack */
-		if ( rx->status & cpu_to_le32 ( INTEL_DESC_STATUS_RXE ) ) {
-			DBGC ( intel, "INTEL %p RX %d error (length %zd, "
-			       "status %08x)\n", intel, rx_idx, len,
-			       le32_to_cpu ( rx->status ) );
+		if ( status != INTEL_DESC_STATUS_EOP ) {
+			DBGC ( intel, "INTEL %p RX %d error (length %zd):\n",
+			       intel, rx_idx, len );
+			DBGC_HDA ( intel, 0, rx, sizeof ( *rx ) );
 			netdev_rx_err ( netdev, iobuf, -EIO );
 		} else {
 			DBGC2 ( intel, "INTEL %p RX %d complete (length %zd)\n",
@@ -847,17 +913,12 @@ static void intel_poll ( struct net_device *netdev ) {
 	icr = readl ( intel->regs + INTEL_ICR );
 	profile_stop ( &intel_vm_poll_profiler );
 	profile_exclude ( &intel_vm_poll_profiler );
-	icr |= intel->force_icr;
-	if ( ! icr )
-		return;
 
-	/* Poll for TX completions, if applicable */
-	if ( icr & INTEL_IRQ_TXDW )
-		intel_poll_tx ( netdev );
+	/* Poll for TX completions */
+	intel_poll_tx ( netdev );
 
-	/* Poll for RX completions, if applicable */
-	if ( icr & ( INTEL_IRQ_RXT0 | INTEL_IRQ_RXO ) )
-		intel_poll_rx ( netdev );
+	/* Poll for RX completions */
+	intel_poll_rx ( netdev );
 
 	/* Report receive overruns */
 	if ( icr & INTEL_IRQ_RXO )
@@ -938,19 +999,24 @@ static int intel_probe ( struct pci_device *pci ) {
 	intel->port = PCI_FUNC ( pci->busdevfn );
 	intel->flags = pci->id->driver_data;
 	intel_init_ring ( &intel->tx, INTEL_NUM_TX_DESC, INTEL_TD,
-			  intel_describe_tx );
+			  intel_describe_tx, intel_status_tx );
 	intel_init_ring ( &intel->rx, INTEL_NUM_RX_DESC, INTEL_RD,
-			  intel_describe_rx );
+			  intel_describe_rx, intel_status_rx );
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
 
 	/* Map registers */
-	intel->regs = ioremap ( pci->membase, INTEL_BAR_SIZE );
+	intel->regs = pci_ioremap ( pci, pci->membase, INTEL_BAR_SIZE );
 	if ( ! intel->regs ) {
 		rc = -ENODEV;
 		goto err_ioremap;
 	}
+
+	/* Configure DMA */
+	intel->dma = &pci->dma;
+	dma_set_mask_64bit ( intel->dma );
+	netdev->dma = intel->dma;
 
 	/* Reset the NIC */
 	if ( ( rc = intel_reset ( intel ) ) != 0 )
@@ -1009,6 +1075,15 @@ static struct pci_device_id intel_nics[] = {
 	PCI_ROM ( 0x8086, 0x043a, "dh8900cc-f", "DH8900CC Fiber", 0 ),
 	PCI_ROM ( 0x8086, 0x043c, "dh8900cc-b", "DH8900CC Backplane", 0 ),
 	PCI_ROM ( 0x8086, 0x0440, "dh8900cc-s", "DH8900CC SFP", 0 ),
+	PCI_ROM ( 0x8086, 0x0d4c, "i219lm-11", "I219-LM (11)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x0d4d, "i219v-11", "I219-V (11)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x0d4e, "i219lm-10", "I219-LM (10)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x0d4f, "i219v-10", "I219-V (10)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x0d53, "i219lm-12", "I219-LM (12)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x0d55, "i219v-12", "I219-V (12)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x0d9f, "i225it", "I225-IT", INTEL_PBSIZE_RST ),
+	PCI_ROM ( 0x8086, 0x0dc5, "i219lm-23", "I219-LM (23)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x0dc6, "i219v-23", "I219-v (23)", INTEL_I219 ),
 	PCI_ROM ( 0x8086, 0x1000, "82542-f", "82542 (Fiber)", 0 ),
 	PCI_ROM ( 0x8086, 0x1001, "82543gc-f", "82543GC (Fiber)", 0 ),
 	PCI_ROM ( 0x8086, 0x1004, "82543gc", "82543GC (Copper)", 0 ),
@@ -1098,6 +1173,9 @@ static struct pci_device_id intel_nics[] = {
 	PCI_ROM ( 0x8086, 0x10f0, "82578dc", "82578DC", 0 ),
 	PCI_ROM ( 0x8086, 0x10f5, "82567lm", "82567LM", 0 ),
 	PCI_ROM ( 0x8086, 0x10f6, "82574l", "82574L", 0 ),
+	PCI_ROM ( 0x8086, 0x125b, "i226lm", "I226-LM", INTEL_PBSIZE_RST ),
+	PCI_ROM ( 0x8086, 0x125c, "i226v", "I226-V", INTEL_PBSIZE_RST ),
+	PCI_ROM ( 0x8086, 0x125d, "i226it", "I226-IT", INTEL_PBSIZE_RST ),
 	PCI_ROM ( 0x8086, 0x1501, "82567v-3", "82567V-3", INTEL_PBS_ERRATA ),
 	PCI_ROM ( 0x8086, 0x1502, "82579lm", "82579LM", INTEL_NO_PHY_RST ),
 	PCI_ROM ( 0x8086, 0x1503, "82579v", "82579V", 0 ),
@@ -1117,28 +1195,68 @@ static struct pci_device_id intel_nics[] = {
 	PCI_ROM ( 0x8086, 0x1525, "82567v-4", "82567V-4", 0 ),
 	PCI_ROM ( 0x8086, 0x1526, "82576-5", "82576", 0 ),
 	PCI_ROM ( 0x8086, 0x1527, "82580-f2", "82580 Fiber", 0 ),
-	PCI_ROM ( 0x8086, 0x1533, "i210", "I210", 0 ),
+	PCI_ROM ( 0x8086, 0x1533, "i210", "I210", INTEL_PBSIZE_RST ),
 	PCI_ROM ( 0x8086, 0x1539, "i211", "I211", 0 ),
 	PCI_ROM ( 0x8086, 0x153a, "i217lm", "I217-LM", INTEL_NO_PHY_RST ),
 	PCI_ROM ( 0x8086, 0x153b, "i217v", "I217-V", 0 ),
-	PCI_ROM ( 0x8086, 0x1559, "i218v", "I218-V", 0),
-	PCI_ROM ( 0x8086, 0x155a, "i218lm", "I218-LM", 0),
-	PCI_ROM ( 0x8086, 0x156f, "i219lm", "I219-LM", 0 ),
-	PCI_ROM ( 0x8086, 0x1570, "i219v", "I219-V", INTEL_NO_PHY_RST ),
-	PCI_ROM ( 0x8086, 0x157b, "i210-2", "I210", 0 ),
+	PCI_ROM ( 0x8086, 0x1559, "i218v", "I218-V", INTEL_NO_PHY_RST ),
+	PCI_ROM ( 0x8086, 0x155a, "i218lm", "I218-LM", INTEL_NO_PHY_RST ),
+	PCI_ROM ( 0x8086, 0x156f, "i219lm", "I219-LM", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x1570, "i219v", "I219-V", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x157b, "i210-2", "I210", INTEL_PBSIZE_RST ),
 	PCI_ROM ( 0x8086, 0x15a0, "i218lm-2", "I218-LM", INTEL_NO_PHY_RST ),
 	PCI_ROM ( 0x8086, 0x15a1, "i218v-2", "I218-V", 0 ),
 	PCI_ROM ( 0x8086, 0x15a2, "i218lm-3", "I218-LM", INTEL_NO_PHY_RST ),
 	PCI_ROM ( 0x8086, 0x15a3, "i218v-3", "I218-V", INTEL_NO_PHY_RST ),
-	PCI_ROM ( 0x8086, 0x15b7, "i219lm-2", "I219-LM (2)", INTEL_NO_PHY_RST ),
-	PCI_ROM ( 0x8086, 0x15b8, "i219v-2", "I219-V (2)", 0 ),
-	PCI_ROM ( 0x8086, 0x15b9, "i219lm-3", "I219-LM (3)", INTEL_NO_PHY_RST ),
-	PCI_ROM ( 0x8086, 0x15d6, "i219v-5", "I219-V (5)", INTEL_NO_PHY_RST ),
-	PCI_ROM ( 0x8086, 0x15d7, "i219lm-4", "I219-LM (4)", INTEL_NO_PHY_RST ),
-	PCI_ROM ( 0x8086, 0x15d8, "i219v-4", "I219-V (4)", INTEL_NO_PHY_RST ),
-	PCI_ROM ( 0x8086, 0x15e3, "i219lm-5", "I219-LM (5)", INTEL_NO_PHY_RST ),
+	PCI_ROM ( 0x8086, 0x15b7, "i219lm-2", "I219-LM (2)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15b8, "i219v-2", "I219-V (2)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15b9, "i219lm-3", "I219-LM (3)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15bb, "i219lm-7", "I219-LM (7)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15bc, "i219v-7", "I219-V (7)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15bd, "i219lm-6", "I219-LM (6)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15be, "i219v-6", "I219-V (6)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15d6, "i219v-5", "I219-V (5)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15d7, "i219lm-4", "I219-LM (4)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15d8, "i219v-4", "I219-V (4)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15df, "i219lm-8", "I219-LM (8)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15e0, "i219v-8", "I219-V (8)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15e1, "i219lm-9", "I219-LM (9)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15e2, "i219v-9", "I219-V (9)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15e3, "i219lm-5", "I219-LM (5)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15f2, "i225lm", "I225-LM", INTEL_PBSIZE_RST ),
+	PCI_ROM ( 0x8086, 0x15f3, "i225v", "I225-V", INTEL_PBSIZE_RST ),
+	PCI_ROM ( 0x8086, 0x15f4, "i219lm-15", "I219-LM (15)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15f5, "i219v-15", "I219-V (15)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15f9, "i219lm-14", "I219-LM (14)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15fa, "i219v-14", "I219-V (14)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15fb, "i219lm-13", "I219-LM (13)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x15fc, "i219v-13", "I219-V (13)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x1a1c, "i219lm-17", "I219-LM (17)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x1a1d, "i219v-17", "I219-V (17)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x1a1e, "i219lm-16", "I219-LM (16)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x1a1f, "i219v-16", "I219-V (16)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x1f41, "i354", "I354", INTEL_NO_ASDE ),
 	PCI_ROM ( 0x8086, 0x294c, "82566dc-2", "82566DC-2", 0 ),
 	PCI_ROM ( 0x8086, 0x2e6e, "cemedia", "CE Media Processor", 0 ),
+	PCI_ROM ( 0x8086, 0x5502, "i225lmvp", "I225-LMvP", INTEL_PBSIZE_RST ),
+	PCI_ROM ( 0x8086, 0x550a, "i219lm-18", "I219-LM (18)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x550b, "i219v-18", "I219-V (18)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x550c, "i219lm-19", "I219-LM (19)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x550d, "i219v-19", "I219-V (19)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x550e, "i219lm-20", "I219-LM (20)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x550f, "i219v-20", "I219-V (20)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x5510, "i219lm-21", "I219-LM (21)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x5511, "i219v-21", "I219-V (21)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57a0, "i219lm-24", "I219-LM (24)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57a1, "i219v-24", "I219-V (24)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57b3, "i219lm-25", "I219-LM (25)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57b4, "i219v-25", "I219-V (25)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57b5, "i219lm-26", "I219-LM (26)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57b6, "i219v-26", "I219-V (26)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57b7, "i219lm-27", "I219-LM (27)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57b8, "i219v-27", "I219-V (27)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57b9, "i219lm-29", "I219-LM (29)", INTEL_I219 ),
+	PCI_ROM ( 0x8086, 0x57ba, "i219v-29", "I219-V (29)", INTEL_I219 ),
 };
 
 /** Intel PCI driver */

@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <stdlib.h>
@@ -43,6 +44,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/settings.h>
 #include <ipxe/dhcp.h>
 #include <ipxe/uri.h>
+#include <ipxe/profile.h>
+#include <ipxe/errortab.h>
 #include <ipxe/tftp.h>
 
 /** @file
@@ -75,6 +78,9 @@ FEATURE ( FEATURE_PROTOCOL, "TFTP", DHCP_EB_FEATURE_TFTP, 1 );
 #define EINVAL_MC_INVALID_PORT __einfo_error ( EINFO_EINVAL_MC_INVALID_PORT )
 #define EINFO_EINVAL_MC_INVALID_PORT __einfo_uniqify \
 	( EINFO_EINVAL, 0x07, "Invalid multicast port" )
+#define ENOENT_NOT_FOUND __einfo_error ( EINFO_ENOENT_NOT_FOUND )
+#define EINFO_ENOENT_NOT_FOUND __einfo_uniqify \
+	( EINFO_ENOENT, 0x01, "Not found" )
 
 /**
  * A TFTP request
@@ -157,6 +163,19 @@ enum {
 
 /** Maximum number of MTFTP open requests before falling back to TFTP */
 #define MTFTP_MAX_TIMEOUTS 3
+
+/** Client profiler */
+static struct profiler tftp_client_profiler __profiler =
+	{ .name = "tftp.client" };
+
+/** Server profiler */
+static struct profiler tftp_server_profiler __profiler =
+	{ .name = "tftp.server" };
+
+/** Human-readable error messages */
+struct errortab tftp_errors[] __errortab = {
+	__einfo_errortab ( EINFO_ENOENT_NOT_FOUND ),
+};
 
 /**
  * Free TFTP request
@@ -279,6 +298,8 @@ static int tftp_presize ( struct tftp_request *tftp, size_t filesize ) {
 	 * length is an exact multiple of the blocksize will have a
 	 * trailing zero-length block, which must be included.
 	 */
+	if ( tftp->blksize == 0 )
+		return -EINVAL;
 	num_blocks = ( ( filesize / tftp->blksize ) + 1 );
 	if ( ( rc = bitmap_resize ( &tftp->bitmap, num_blocks ) ) != 0 ) {
 		DBGC ( tftp, "TFTP %p could not resize bitmap to %d blocks: "
@@ -543,8 +564,7 @@ static void tftp_timer_expired ( struct retry_timer *timer, int fail ) {
  * @v value		Option value
  * @ret rc		Return status code
  */
-static int tftp_process_blksize ( struct tftp_request *tftp,
-				  const char *value ) {
+static int tftp_process_blksize ( struct tftp_request *tftp, char *value ) {
 	char *end;
 
 	tftp->blksize = strtoul ( value, &end, 10 );
@@ -565,8 +585,7 @@ static int tftp_process_blksize ( struct tftp_request *tftp,
  * @v value		Option value
  * @ret rc		Return status code
  */
-static int tftp_process_tsize ( struct tftp_request *tftp,
-				const char *value ) {
+static int tftp_process_tsize ( struct tftp_request *tftp, char *value ) {
 	char *end;
 
 	tftp->tsize = strtoul ( value, &end, 10 );
@@ -587,13 +606,11 @@ static int tftp_process_tsize ( struct tftp_request *tftp,
  * @v value		Option value
  * @ret rc		Return status code
  */
-static int tftp_process_multicast ( struct tftp_request *tftp,
-				    const char *value ) {
+static int tftp_process_multicast ( struct tftp_request *tftp, char *value ) {
 	union {
 		struct sockaddr sa;
 		struct sockaddr_in sin;
 	} socket;
-	char buf[ strlen ( value ) + 1 ];
 	char *addr;
 	char *port;
 	char *port_end;
@@ -602,8 +619,7 @@ static int tftp_process_multicast ( struct tftp_request *tftp,
 	int rc;
 
 	/* Split value into "addr,port,mc" fields */
-	memcpy ( buf, value, sizeof ( buf ) );
-	addr = buf;
+	addr = value;
 	port = strchr ( addr, ',' );
 	if ( ! port ) {
 		DBGC ( tftp, "TFTP %p multicast missing port,mc\n", tftp );
@@ -660,7 +676,7 @@ struct tftp_option {
 	 * @v value	Option value
 	 * @ret rc	Return status code
 	 */
-	int ( * process ) ( struct tftp_request *tftp, const char *value );
+	int ( * process ) ( struct tftp_request *tftp, char *value );
 };
 
 /** Recognised TFTP options */
@@ -680,7 +696,7 @@ static struct tftp_option tftp_options[] = {
  * @ret rc		Return status code
  */
 static int tftp_process_option ( struct tftp_request *tftp,
-				 const char *name, const char *value ) {
+				 const char *name, char *value ) {
 	struct tftp_option *option;
 
 	for ( option = tftp_options ; option->name ; option++ ) {
@@ -704,7 +720,7 @@ static int tftp_process_option ( struct tftp_request *tftp,
  * @ret rc		Return status code
  */
 static int tftp_rx_oack ( struct tftp_request *tftp, void *buf, size_t len ) {
-	struct tftp_oack *oack = buf;
+	struct tftp_oack *oack;
 	char *end = buf + len;
 	char *name;
 	char *value;
@@ -718,6 +734,7 @@ static int tftp_rx_oack ( struct tftp_request *tftp, void *buf, size_t len ) {
 		rc = -EINVAL;
 		goto done;
 	}
+	oack = buf;
 
 	/* Process each option in turn */
 	for ( name = oack->data ; name < end ; name = next ) {
@@ -781,7 +798,7 @@ static int tftp_rx_oack ( struct tftp_request *tftp, void *buf, size_t len ) {
  */
 static int tftp_rx_data ( struct tftp_request *tftp,
 			  struct io_buffer *iobuf ) {
-	struct tftp_data *data = iobuf->data;
+	struct tftp_data *data;
 	struct xfer_metadata meta;
 	unsigned int block;
 	off_t offset;
@@ -795,6 +812,7 @@ static int tftp_rx_data ( struct tftp_request *tftp,
 		rc = -EINVAL;
 		goto done;
 	}
+	data = iobuf->data;
 
 	/* Calculate block number */
 	block = ( ( bitmap_first_gap ( &tftp->bitmap ) + 1 ) & ~0xffff );
@@ -804,6 +822,10 @@ static int tftp_rx_data ( struct tftp_request *tftp,
 		goto done;
 	}
 	block += ( ntohs ( data->block ) - 1 );
+
+	/* Stop profiling server turnaround if applicable */
+	if ( block )
+		profile_stop ( &tftp_server_profiler );
 
 	/* Extract data */
 	offset = ( block * tftp->blksize );
@@ -832,10 +854,17 @@ static int tftp_rx_data ( struct tftp_request *tftp,
 		goto done;
 
 	/* Mark block as received */
-	bitmap_set ( &tftp->bitmap, block );
+	if ( ( rc = bitmap_set ( &tftp->bitmap, block ) ) != 0 )
+		goto done;
 
 	/* Acknowledge block */
 	tftp_send_packet ( tftp );
+
+	/* Stop profiling client turnaround */
+	profile_stop ( &tftp_client_profiler );
+
+	/* Start profiling server turnaround */
+	profile_start ( &tftp_server_profiler );
 
 	/* If all blocks have been received, finish. */
 	if ( bitmap_full ( &tftp->bitmap ) )
@@ -856,7 +885,7 @@ static int tftp_rx_data ( struct tftp_request *tftp,
  */
 static int tftp_errcode_to_rc ( unsigned int errcode ) {
 	switch ( errcode ) {
-	case TFTP_ERR_FILE_NOT_FOUND:	return -ENOENT;
+	case TFTP_ERR_FILE_NOT_FOUND:	return -ENOENT_NOT_FOUND;
 	case TFTP_ERR_ACCESS_DENIED:	return -EACCES;
 	case TFTP_ERR_ILLEGAL_OP:	return -ENOTTY;
 	default:			return -ENOTSUP;
@@ -872,7 +901,7 @@ static int tftp_errcode_to_rc ( unsigned int errcode ) {
  * @ret rc		Return status code
  */
 static int tftp_rx_error ( struct tftp_request *tftp, void *buf, size_t len ) {
-	struct tftp_error *error = buf;
+	struct tftp_error *error;
 	int rc;
 
 	/* Sanity check */
@@ -881,6 +910,7 @@ static int tftp_rx_error ( struct tftp_request *tftp, void *buf, size_t len ) {
 		       "length %zd\n", tftp, len );
 		return -EINVAL;
 	}
+	error = buf;
 
 	DBGC ( tftp, "TFTP %p received ERROR packet with code %d, message "
 	       "\"%s\"\n", tftp, ntohs ( error->errcode ), error->errmsg );
@@ -906,16 +936,20 @@ static int tftp_rx ( struct tftp_request *tftp,
 		     struct io_buffer *iobuf,
 		     struct xfer_metadata *meta ) {
 	struct sockaddr_tcpip *st_src;
-	struct tftp_common *common = iobuf->data;
+	struct tftp_common *common;
 	size_t len = iob_len ( iobuf );
 	int rc = -EINVAL;
-	
+
+	/* Start profiling client turnaround */
+	profile_start ( &tftp_client_profiler );
+
 	/* Sanity checks */
 	if ( len < sizeof ( *common ) ) {
 		DBGC ( tftp, "TFTP %p received underlength packet length "
 		       "%zd\n", tftp, len );
 		goto done;
 	}
+	common = iobuf->data;
 	if ( ! meta->src ) {
 		DBGC ( tftp, "TFTP %p received packet without source port\n",
 		       tftp );
@@ -1175,6 +1209,18 @@ struct uri_opener mtftp_uri_opener __uri_opener = {
  ******************************************************************************
  */
 
+/** TFTP server URI host name */
+static char tftp_uri_host[ 16 /* "xxx.xxx.xxx.xxx" + NUL */ ];
+
+/** TFTP server URI */
+static struct uri tftp_uri = {
+	.refcnt = REF_INIT ( ref_no_free ),
+	.scheme = "tftp",
+	.host = tftp_uri_host,
+	.path = "/",
+	.epath = "/",
+};
+
 /**
  * Apply TFTP configuration settings
  *
@@ -1183,32 +1229,29 @@ struct uri_opener mtftp_uri_opener __uri_opener = {
 static int tftp_apply_settings ( void ) {
 	static struct in_addr tftp_server = { 0 };
 	struct in_addr new_tftp_server;
-	char uri_string[32];
-	struct uri *uri;
 
 	/* Retrieve TFTP server setting */
 	fetch_ipv4_setting ( NULL, &next_server_setting, &new_tftp_server );
 
-	/* If TFTP server setting has changed, set the current working
-	 * URI to match.  Do it only when the TFTP server has changed
-	 * to try to minimise surprises to the user, who probably
-	 * won't expect the CWURI to change just because they updated
-	 * an unrelated setting and triggered all the settings
-	 * applicators.
+	/* If TFTP server setting has changed, update the TFTP server
+	 * URI to match.
 	 */
-	if ( new_tftp_server.s_addr &&
-	     ( new_tftp_server.s_addr != tftp_server.s_addr ) ) {
+	if ( new_tftp_server.s_addr != tftp_server.s_addr ) {
 		DBGC ( &tftp_server, "TFTP server changed %s => ",
 		       inet_ntoa ( tftp_server ) );
 		DBGC ( &tftp_server, "%s\n", inet_ntoa ( new_tftp_server ) );
-		snprintf ( uri_string, sizeof ( uri_string ),
-			   "tftp://%s/", inet_ntoa ( new_tftp_server ) );
-		uri = parse_uri ( uri_string );
-		if ( ! uri )
-			return -ENOMEM;
-		churi ( uri );
-		uri_put ( uri );
+		snprintf ( tftp_uri_host, sizeof ( tftp_uri_host ), "%s",
+			   inet_ntoa ( new_tftp_server ) );
 		tftp_server = new_tftp_server;
+	}
+
+	/* Use TFTP server URI as fallback current working URI */
+	if ( new_tftp_server.s_addr && ( cwuri == NULL ) ) {
+		DBGC ( &tftp_server, "TFTP server setting working URI\n" );
+		churi ( &tftp_uri );
+	} else if ( ( ! new_tftp_server.s_addr ) && ( cwuri == &tftp_uri ) ) {
+		DBGC ( &tftp_server, "TFTP server clearing working URI\n" );
+		churi ( NULL );
 	}
 
 	return 0;

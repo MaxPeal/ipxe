@@ -25,6 +25,7 @@
 #define ERRNO_H
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
@@ -101,6 +102,49 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  * which can then be used as:
  *
  *     return -EACCES_INCORRECT_TARGET_USERNAME;
+ *
+ * @anchor composable_errors
+ *
+ * Code that may need to undo actions if an error occurs should use a
+ * structured goto approach, where the code to perform the undo action
+ * appears before the corresponding error label in the error-handling
+ * code path.  For example:
+ *
+ *     if ( ( rc = try_thing() ) != 0 )
+ *         goto err_thing;
+ *     ...
+ *     return 0;
+ *     ...
+ *     undo_thing();
+ *    err_thing:
+ *     ...
+ *     return rc;
+ *
+ * This pattern is designed to allow for clean composition of multiple
+ * potential undoing code blocks.  For example:
+ *
+ *     if ( ( rc = try_thing1() ) != 0 )
+ *         goto err_thing1;
+ *     if ( ( rc = try_thing2() ) != 0 )
+ *         goto err_thing2;
+ *     ...
+ *     return 0;
+ *     ...
+ *     undo_thing2();
+ *    err_thing2:
+ *     undo_thing1();
+ *    err_thing1:
+ *     ...
+ *     return rc;
+ *
+ * The error labels should generally appear in reverse order, and the
+ * code to perform the undoing action should always appear immediately
+ * before its corresponding error label.  Importantly, this code
+ * before the label should be included even if it is provably
+ * unreachable, so that future code changes cannot accidentally forget
+ * to include it.  (The unreachable code will be eliminated by the
+ * compiler, though many analysis tools will irritatingly complain
+ * about it.)
  *
  */
 
@@ -259,16 +303,16 @@ static inline void eplatform_discard ( int dummy __unused, ... ) {}
  */
 #define __einfo_error( einfo ) ( {					\
 	__asm__ ( ".section \".einfo\", \"\", " PROGBITS_OPS "\n\t"	\
-		  ".align 8\n\t"					\
+		  ".balign 8\n\t"					\
 		  "\n1:\n\t"						\
 		  ".long ( 4f - 1b )\n\t"				\
-		  ".long %a0\n\t"					\
+		  ".long %" ASM_NO_PREFIX "0\n\t"			\
 		  ".long ( 2f - 1b )\n\t"				\
 		  ".long ( 3f - 1b )\n\t"				\
-		  ".long %a1\n\t"					\
+		  ".long %" ASM_NO_PREFIX "1\n\t"			\
 		  "\n2:\t.asciz \"" __einfo_desc ( einfo ) "\"\n\t"	\
 		  "\n3:\t.asciz \"" __FILE__ "\"\n\t"			\
-		  ".align 8\n\t"					\
+		  ".balign 8\n\t"					\
 		  "\n4:\n\t"						\
 		  ".previous\n\t" : :					\
 		  "i" ( __einfo_errno ( einfo ) ),			\

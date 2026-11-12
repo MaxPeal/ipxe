@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <unistd.h>
@@ -64,92 +65,67 @@ static struct profiler smsc95xx_out_profiler __profiler =
  */
 static int smsc95xx_vm3_fetch_mac ( struct smscusb_device *smscusb ) {
 	struct net_device *netdev = smscusb->netdev;
-	struct smbios_structure structure;
-	struct smbios_system_information system;
-	struct {
-		char manufacturer[ 10 /* "Honeywell" + NUL */ ];
-		char product[ 4 /* "VM3" + NUL */ ];
-		char mac[ base16_encoded_len ( ETH_ALEN ) + 1 /* NUL */ ];
-	} strings;
+	const struct smbios_header *structure;
+	const struct smbios_system_information *system;
+	const char *manufacturer;
+	const char *product;
+	const char *mac;
 	int len;
 	int rc;
 
 	/* Find system information */
-	if ( ( rc = find_smbios_structure ( SMBIOS_TYPE_SYSTEM_INFORMATION, 0,
-					    &structure ) ) != 0 ) {
+	structure = smbios_structure ( SMBIOS_TYPE_SYSTEM_INFORMATION, 0 );
+	if ( ! structure ) {
 		DBGC ( smscusb, "SMSC95XX %p could not find system "
-		       "information: %s\n", smscusb, strerror ( rc ) );
-		return rc;
+		       "information\n", smscusb );
+		return -ENOENT;
 	}
-
-	/* Read system information */
-	if ( ( rc = read_smbios_structure ( &structure, &system,
-					    sizeof ( system ) ) ) != 0 ) {
-		DBGC ( smscusb, "SMSC95XX %p could not read system "
-		       "information: %s\n", smscusb, strerror ( rc ) );
-		return rc;
-	}
-
-	/* NUL-terminate all strings to be fetched */
-	memset ( &strings, 0, sizeof ( strings ) );
+	system = container_of ( structure, struct smbios_system_information,
+				header );
 
 	/* Fetch system manufacturer name */
-	len = read_smbios_string ( &structure, system.manufacturer,
-				   strings.manufacturer,
-				   ( sizeof ( strings.manufacturer ) - 1 ) );
-	if ( len < 0 ) {
-		rc = len;
+	manufacturer = smbios_string ( structure, system->manufacturer );
+	if ( ! manufacturer ) {
 		DBGC ( smscusb, "SMSC95XX %p could not read manufacturer "
-		       "name: %s\n", smscusb, strerror ( rc ) );
-		return rc;
+		       "name\n", smscusb );
+		return -ENOENT;
 	}
 
 	/* Fetch system product name */
-	len = read_smbios_string ( &structure, system.product, strings.product,
-				   ( sizeof ( strings.product ) - 1 ) );
-	if ( len < 0 ) {
-		rc = len;
-		DBGC ( smscusb, "SMSC95XX %p could not read product name: "
-		       "%s\n", smscusb, strerror ( rc ) );
-		return rc;
+	product = smbios_string ( structure, system->product );
+	if ( ! product ) {
+		DBGC ( smscusb, "SMSC95XX %p could not read product name\n",
+		       smscusb );
+		return -ENOENT;
 	}
 
 	/* Ignore non-VM3 devices */
-	if ( ( strcmp ( strings.manufacturer, "Honeywell" ) != 0 ) ||
-	     ( strcmp ( strings.product, "VM3" ) != 0 ) )
+	if ( ( strcmp ( manufacturer, "Honeywell" ) != 0 ) ||
+	     ( strcmp ( product, "VM3" ) != 0 ) )
 		return -ENOTTY;
 
 	/* Find OEM strings */
-	if ( ( rc = find_smbios_structure ( SMBIOS_TYPE_OEM_STRINGS, 0,
-					    &structure ) ) != 0 ) {
-		DBGC ( smscusb, "SMSC95XX %p could not find OEM strings: %s\n",
-		       smscusb, strerror ( rc ) );
-		return rc;
+	structure = smbios_structure ( SMBIOS_TYPE_OEM_STRINGS, 0 );
+	if ( ! structure ) {
+		DBGC ( smscusb, "SMSC95XX %p could not find OEM strings\n",
+		       smscusb );
+		return -ENOENT;
 	}
 
 	/* Fetch MAC address */
-	len = read_smbios_string ( &structure, SMSC95XX_VM3_OEM_STRING_MAC,
-				   strings.mac, ( sizeof ( strings.mac ) - 1 ));
-	if ( len < 0 ) {
-		rc = len;
-		DBGC ( smscusb, "SMSC95XX %p could not read OEM string: %s\n",
-		       smscusb, strerror ( rc ) );
-		return rc;
-	}
-
-	/* Sanity check */
-	if ( len != ( ( int ) ( sizeof ( strings.mac ) - 1 ) ) ) {
-		DBGC ( smscusb, "SMSC95XX %p invalid MAC address \"%s\"\n",
-		       smscusb, strings.mac );
-		return -EINVAL;
+	mac = smbios_string ( structure, SMSC95XX_VM3_OEM_STRING_MAC );
+	if ( ! mac ) {
+		DBGC ( smscusb, "SMSC95XX %p could not read OEM string\n",
+		       smscusb );
+		return -ENOENT;
 	}
 
 	/* Decode MAC address */
-	len = base16_decode ( strings.mac, netdev->hw_addr, ETH_ALEN );
+	len = base16_decode ( mac, netdev->hw_addr, ETH_ALEN );
 	if ( len < 0 ) {
 		rc = len;
 		DBGC ( smscusb, "SMSC95XX %p invalid MAC address \"%s\"\n",
-		       smscusb, strings.mac );
+		       smscusb, mac );
 		return rc;
 	}
 
@@ -171,6 +147,10 @@ static int smsc95xx_fetch_mac ( struct smscusb_device *smscusb ) {
 	/* Read MAC address from EEPROM, if present */
 	if ( ( rc = smscusb_eeprom_fetch_mac ( smscusb,
 					       SMSC95XX_E2P_BASE ) ) == 0 )
+		return 0;
+
+	/* Read MAC address from device tree, if present */
+	if ( ( rc = smscusb_fdt_fetch_mac ( smscusb ) ) == 0 )
 		return 0;
 
 	/* Construct MAC address for Honeywell VM3, if applicable */
@@ -664,96 +644,24 @@ static void smsc95xx_remove ( struct usb_function *func ) {
 
 /** SMSC95xx device IDs */
 static struct usb_device_id smsc95xx_ids[] = {
-	{
-		.name = "smsc9500",
-		.vendor = 0x0424,
-		.product = 0x9500,
-	},
-	{
-		.name = "smsc9505",
-		.vendor = 0x0424,
-		.product = 0x9505,
-	},
-	{
-		.name = "smsc9500a",
-		.vendor = 0x0424,
-		.product = 0x9e00,
-	},
-	{
-		.name = "smsc9505a",
-		.vendor = 0x0424,
-		.product = 0x9e01,
-	},
-	{
-		.name = "smsc9514",
-		.vendor = 0x0424,
-		.product = 0xec00,
-	},
-	{
-		.name = "smsc9500-s",
-		.vendor = 0x0424,
-		.product = 0x9900,
-	},
-	{
-		.name = "smsc9505-s",
-		.vendor = 0x0424,
-		.product = 0x9901,
-	},
-	{
-		.name = "smsc9500a-s",
-		.vendor = 0x0424,
-		.product = 0x9902,
-	},
-	{
-		.name = "smsc9505a-s",
-		.vendor = 0x0424,
-		.product = 0x9903,
-	},
-	{
-		.name = "smsc9514-s",
-		.vendor = 0x0424,
-		.product = 0x9904,
-	},
-	{
-		.name = "smsc9500a-h",
-		.vendor = 0x0424,
-		.product = 0x9905,
-	},
-	{
-		.name = "smsc9505a-h",
-		.vendor = 0x0424,
-		.product = 0x9906,
-	},
-	{
-		.name = "smsc9500-2",
-		.vendor = 0x0424,
-		.product = 0x9907,
-	},
-	{
-		.name = "smsc9500a-2",
-		.vendor = 0x0424,
-		.product = 0x9908,
-	},
-	{
-		.name = "smsc9514-2",
-		.vendor = 0x0424,
-		.product = 0x9909,
-	},
-	{
-		.name = "smsc9530",
-		.vendor = 0x0424,
-		.product = 0x9530,
-	},
-	{
-		.name = "smsc9730",
-		.vendor = 0x0424,
-		.product = 0x9730,
-	},
-	{
-		.name = "smsc89530",
-		.vendor = 0x0424,
-		.product = 0x9e08,
-	},
+	USB_ROM ( 0x0424, 0x9500, "smsc9500", "SMSC LAN9500", 0 ),
+	USB_ROM ( 0x0424, 0x9505, "smsc9505", "SMSC LAN9505", 0 ),
+	USB_ROM ( 0x0424, 0x9e00, "smsc9500a", "SMSC LAN9500A", 0 ),
+	USB_ROM ( 0x0424, 0x9e01, "smsc9505a", "SMSC LAN9505A", 0 ),
+	USB_ROM ( 0x0424, 0xec00, "smsc9514", "SMSC LAN9512/9514", 0 ),
+	USB_ROM ( 0x0424, 0x9900, "smsc9500-s", "SMSC LAN9500-S", 0 ),
+	USB_ROM ( 0x0424, 0x9901, "smsc9505-s", "SMSC LAN9505-S", 0 ),
+	USB_ROM ( 0x0424, 0x9902, "smsc9500a-s", "SMSC LAN9500A-S", 0 ),
+	USB_ROM ( 0x0424, 0x9903, "smsc9505a-s", "SMSC LAN9505A-S", 0 ),
+	USB_ROM ( 0x0424, 0x9904, "smsc9514-s", "SMSC LAN9512/9514-S", 0 ),
+	USB_ROM ( 0x0424, 0x9905, "smsc9500a-h", "SMSC LAN9500A-H", 0 ),
+	USB_ROM ( 0x0424, 0x9906, "smsc9505a-h", "SMSC LAN9505A-H", 0 ),
+	USB_ROM ( 0x0424, 0x9907, "smsc9500-2", "SMSC LAN9500-2", 0 ),
+	USB_ROM ( 0x0424, 0x9908, "smsc9500a-2", "SMSC LAN9500A-2", 0 ),
+	USB_ROM ( 0x0424, 0x9909, "smsc9514-2", "SMSC LAN9512/9514-2", 0 ),
+	USB_ROM ( 0x0424, 0x9530, "smsc9530", "SMSC LAN9530", 0 ),
+	USB_ROM ( 0x0424, 0x9730, "smsc9730", "SMSC LAN9730", 0 ),
+	USB_ROM ( 0x0424, 0x9e08, "smsc89530", "SMSC LAN89530", 0 ),
 };
 
 /** SMSC LAN95xx driver */

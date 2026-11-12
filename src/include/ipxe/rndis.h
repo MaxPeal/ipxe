@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/netdevice.h>
@@ -84,7 +85,7 @@ struct rndis_initialise_completion {
 	/** Packet alignment factor */
 	uint32_t align;
 	/** Reserved */
-	uint32_t reserved;
+	uint32_t reserved[2];
 } __attribute__ (( packed ));
 
 /** RNDIS halt message */
@@ -237,7 +238,7 @@ struct rndis_packet_message {
 	/** Per-packet information record */
 	struct rndis_packet_field ppi;
 	/** Reserved */
-	uint32_t reserved;
+	uint32_t reserved[2];
 } __attribute__ (( packed ));
 
 /** RNDIS packet record */

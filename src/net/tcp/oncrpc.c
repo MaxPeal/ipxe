@@ -45,9 +45,11 @@
  *
  */
 
+FILE_SECBOOT ( FORBIDDEN );
+
 /** Set most significant bit to 1. */
-#define SET_LAST_FRAME( x ) ( (x) | 1 << 31 )
-#define GET_FRAME_SIZE( x ) ( (x) & ~( 1 << 31 ) )
+#define SET_LAST_FRAME( x ) ( (x) | ( 1U << 31 ) )
+#define GET_FRAME_SIZE( x ) ( (x) & ~( 1U << 31 ) )
 
 #define ONCRPC_CALL     0
 #define ONCRPC_REPLY    1
@@ -150,7 +152,7 @@ int oncrpc_call ( struct interface *intf, struct oncrpc_session *session,
 	frame_size  = oncrpc_compute_size ( header );
 	frame_size += oncrpc_compute_size ( fields );
 
-	io_buf = alloc_iob ( frame_size );
+	io_buf = xfer_alloc_iob ( intf, frame_size );
 	if ( ! io_buf )
 		return -ENOBUFS;
 

@@ -16,6 +16,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #ifdef IOAPI_X86
 #define IOAPI_PREFIX_x86
@@ -27,9 +28,6 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  * Memory space mappings
  *
  */
-
-/** Page shift */
-#define PAGE_SHIFT 12
 
 /*
  * Physical<->Bus address mappings

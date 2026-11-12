@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <errno.h>
@@ -558,6 +559,8 @@ static int ncm_probe ( struct usb_function *func,
 	struct usb_interface_descriptor *comms;
 	struct ecm_ethernet_descriptor *ethernet;
 	struct ncm_ntb_parameters params;
+	unsigned int remainder;
+	unsigned int divisor;
 	int rc;
 
 	/* Allocate and initialise structure */
@@ -596,7 +599,7 @@ static int ncm_probe ( struct usb_function *func,
 	}
 
 	/* Fetch MAC address */
-	if ( ( rc = ecm_fetch_mac ( usb, ethernet, netdev->hw_addr ) ) != 0 ) {
+	if ( ( rc = ecm_fetch_mac ( func, ethernet, netdev ) ) != 0 ) {
 		DBGC ( ncm, "NCM %p could not fetch MAC address: %s\n",
 		       ncm, strerror ( rc ) );
 		goto err_fetch_mac;
@@ -616,14 +619,15 @@ static int ncm_probe ( struct usb_function *func,
 	DBGC2 ( ncm, "NCM %p maximum IN size is %zd bytes\n", ncm, ncm->mtu );
 
 	/* Calculate transmit padding */
-	ncm->padding = ( ( le16_to_cpu ( params.out.remainder ) -
-			   sizeof ( struct ncm_ntb_header ) - ETH_HLEN ) &
-			 ( le16_to_cpu ( params.out.divisor ) - 1 ) );
+	divisor = ( params.out.divisor ?
+		    le16_to_cpu ( params.out.divisor ) : 1 );
+	remainder = le16_to_cpu ( params.out.remainder );
+	ncm->padding = ( ( remainder - sizeof ( struct ncm_ntb_header ) -
+			   ETH_HLEN ) & ( divisor - 1 ) );
 	DBGC2 ( ncm, "NCM %p using %zd-byte transmit padding\n",
 		ncm, ncm->padding );
 	assert ( ( ( sizeof ( struct ncm_ntb_header ) + ncm->padding +
-		     ETH_HLEN ) % le16_to_cpu ( params.out.divisor ) ) ==
-		 le16_to_cpu ( params.out.remainder ) );
+		     ETH_HLEN ) % divisor ) == remainder );
 
 	/* Register network device */
 	if ( ( rc = register_netdev ( netdev ) ) != 0 )
@@ -660,11 +664,7 @@ static void ncm_remove ( struct usb_function *func ) {
 
 /** CDC-NCM device IDs */
 static struct usb_device_id ncm_ids[] = {
-	{
-		.name = "cdc-ncm",
-		.vendor = USB_ANY_ID,
-		.product = USB_ANY_ID,
-	},
+	USB_ROM ( 0xffff, 0xffff, "cdc-ncm", "USB CDC-NCM NIC", 0 ),
 };
 
 /** CDC-NCM driver */

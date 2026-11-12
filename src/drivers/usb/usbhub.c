@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdlib.h>
 #include <string.h>
@@ -110,6 +111,10 @@ static void hub_complete ( struct usb_endpoint *ep,
 	}
 
  done:
+
+	/* Recycle I/O buffer */
+	usb_recycle ( &hubdev->intr, iobuf );
+
 	/* Start refill process */
 	process_add ( &hubdev->refill );
 }
@@ -243,8 +248,10 @@ static int hub_disable ( struct usb_hub *hub, struct usb_port *port ) {
 	int rc;
 
 	/* Disable port */
-	if ( ( rc = usb_hub_clear_port_feature ( usb, port->address,
-						 USB_HUB_PORT_ENABLE, 0 ) )!=0){
+	if ( ( hub->protocol < USB_PROTO_3_0 ) &&
+	     ( ( rc = usb_hub_clear_port_feature ( usb, port->address,
+						   USB_HUB_PORT_ENABLE,
+						   0 ) ) != 0 ) ) {
 		DBGC ( hubdev, "HUB %s port %d could not disable: %s\n",
 		       hubdev->name, port->address, strerror ( rc ) );
 		return rc;
@@ -522,17 +529,9 @@ static void hub_remove ( struct usb_function *func ) {
 
 /** USB hub device IDs */
 static struct usb_device_id hub_ids[] = {
-	{
-		.name = "avocent-hub",
-		.vendor = 0x0624,
-		.product = 0x0248,
-		.driver_data = USB_HUB_SLOW_START,
-	},
-	{
-		.name = "hub",
-		.vendor = USB_ANY_ID,
-		.product = USB_ANY_ID,
-	},
+	USB_ID ( 0x0624, 0x0248, "avocent-hub", "Avocent USB hub",
+		 USB_HUB_SLOW_START ),
+	USB_ID ( 0xffff, 0xffff, "hub", "USB hub", 0 ),
 };
 
 /** USB hub driver */

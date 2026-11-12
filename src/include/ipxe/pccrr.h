@@ -10,9 +10,11 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
-#include <ipxe/uaccess.h>
+
+struct interface;
 
 /** Magic retrieval URI path */
 #define PEERDIST_MAGIC_PATH "/116B50EB-ECE2-41ac-8429-9F9E963361B7/"
@@ -350,27 +352,26 @@ struct peerdist_msg_blk {
 /** Retrieval protocol block fetch response type */
 #define PEERDIST_MSG_BLK_TYPE 0x00000005UL
 
-/**
- * Parse retrieval protocol block fetch response
- *
- * @v raw		Raw data
- * @v raw_len		Length of raw data
- * @v digestsize	Digest size
- * @v blksize		Cipher block size
- * @v blk		Structure to fill in
- * @ret rc		Return status code
- */
-#define peerdist_msg_blk( raw, raw_len, digestsize, blksize, blk ) ( {	\
-	assert ( sizeof ( (blk)->segment.id ) == (digestsize) );	\
-	assert ( sizeof ( (blk)->block.data ) == 0 );			\
-	assert ( sizeof ( (blk)->vrf.data ) == 0 );			\
-	assert ( sizeof ( (blk)->iv.data ) == blksize );		\
-	peerdist_msg_blk_untyped ( (raw), (raw_len), (digestsize),	\
-				   (blksize), blk );			\
-	} )
+/** A retrieval protocol mechanism */
+struct peerdist_retrieval {
+	/** Name */
+	const char *name;
+	/**
+	 * Open retrieval protocol connection
+	 *
+	 * @v xfer		Data transfer interface
+	 * @v location		Peer location
+	 * @v digestsize	Digest size
+	 * @v id		Segment identifier
+	 * @v block		Block index
+	 * @ret rc		Return status code
+	 */
+	int ( * open ) ( struct interface *xfer, const char *location,
+			 size_t digestsize, const uint8_t *id,
+			 unsigned int block );
+};
 
-extern int peerdist_msg_blk_untyped ( userptr_t raw, size_t raw_len,
-				      size_t digestsize, size_t blksize,
-				      void *out );
+extern struct peerdist_retrieval peerdist_post;
+extern struct peerdist_retrieval peerdist_get;
 
 #endif /* _IPXE_PCCRR_H */

@@ -22,10 +22,11 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
- * Form parameter commands
+ * Request parameter commands
  *
  */
 
@@ -40,6 +41,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 struct params_options {
 	/** Name */
 	char *name;
+	/** Method */
+	char *method;
 	/** Delete */
 	int delete;
 };
@@ -48,6 +51,8 @@ struct params_options {
 static struct option_descriptor params_opts[] = {
 	OPTION_DESC ( "name", 'n', required_argument,
 		      struct params_options, name, parse_string ),
+	OPTION_DESC ( "method", 'm', required_argument,
+		      struct params_options, method, parse_string ),
 	OPTION_DESC ( "delete", 'd', no_argument,
 		      struct params_options, delete, parse_flag ),
 };
@@ -73,7 +78,7 @@ static int params_exec ( int argc, char **argv ) {
 		return rc;
 
 	/* Create parameter list */
-	params = create_parameters ( opts.name );
+	params = create_parameters ( opts.name, opts.method );
 	if ( ! params )
 		return -ENOMEM;
 
@@ -90,12 +95,16 @@ static int params_exec ( int argc, char **argv ) {
 struct param_options {
 	/** Parameter list name */
 	char *params;
+	/** Parameter is a header */
+	int header;
 };
 
 /** "param" option list */
 static struct option_descriptor param_opts[] = {
 	OPTION_DESC ( "params", 'p', required_argument,
 		      struct param_options, params, parse_string ),
+	OPTION_DESC ( "header", 'H', no_argument,
+		      struct param_options, header, parse_flag ),
 };
 
 /** "param" command descriptor */
@@ -114,6 +123,7 @@ static int param_exec ( int argc, char **argv ) {
 	struct param_options opts;
 	char *key;
 	char *value;
+	unsigned int flags;
 	struct parameters *params;
 	struct parameter *param;
 	int rc;
@@ -132,12 +142,15 @@ static int param_exec ( int argc, char **argv ) {
 		goto err_parse_value;
 	}
 
+	/* Construct flags */
+	flags = ( opts.header ? PARAMETER_HEADER : PARAMETER_FORM );
+
 	/* Identify parameter list */
 	if ( ( rc = parse_parameters ( opts.params, &params ) ) != 0 )
 		goto err_parse_parameters;
 
 	/* Add parameter */
-	param = add_parameter ( params, key, value );
+	param = add_parameter ( params, key, value, flags );
 	if ( ! param ) {
 		rc = -ENOMEM;
 		goto err_add_parameter;
@@ -154,14 +167,6 @@ static int param_exec ( int argc, char **argv ) {
 	return rc;
 }
 
-/** Form parameter commands */
-struct command param_commands[] __command = {
-	{
-		.name = "params",
-		.exec = params_exec,
-	},
-	{
-		.name = "param",
-		.exec = param_exec,
-	},
-};
+/** Request parameter commands */
+COMMAND ( params, params_exec );
+COMMAND ( param, param_exec );

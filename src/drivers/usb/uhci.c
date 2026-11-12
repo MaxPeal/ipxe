@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <strings.h>
 #include <unistd.h>
@@ -179,7 +180,7 @@ static int uhci_ring_alloc ( struct uhci_ring *ring ) {
 	memset ( ring, 0, sizeof ( *ring ) );
 
 	/* Allocate queue head */
-	ring->head = malloc_dma ( sizeof ( *ring->head ), UHCI_ALIGN );
+	ring->head = malloc_phys ( sizeof ( *ring->head ), UHCI_ALIGN );
 	if ( ! ring->head ) {
 		rc = -ENOMEM;
 		goto err_alloc;
@@ -194,7 +195,7 @@ static int uhci_ring_alloc ( struct uhci_ring *ring ) {
 	return 0;
 
  err_unreachable:
-	free_dma ( ring->head, sizeof ( *ring->head ) );
+	free_phys ( ring->head, sizeof ( *ring->head ) );
  err_alloc:
 	return rc;
 }
@@ -213,7 +214,7 @@ static void uhci_ring_free ( struct uhci_ring *ring ) {
 		assert ( ring->xfer[i] == NULL );
 
 	/* Free queue head */
-	free_dma ( ring->head, sizeof ( *ring->head ) );
+	free_phys ( ring->head, sizeof ( *ring->head ) );
 }
 
 /**
@@ -263,7 +264,7 @@ static int uhci_enqueue ( struct uhci_ring *ring, struct io_buffer *iobuf,
 
 	/* Allocate transfer descriptors */
 	len = ( count * sizeof ( xfer->desc[0] ) );
-	xfer->desc = malloc_dma ( len, UHCI_ALIGN );
+	xfer->desc = malloc_phys ( len, UHCI_ALIGN );
 	if ( ! xfer->desc ) {
 		rc = -ENOMEM;
 		goto err_alloc_desc;
@@ -299,7 +300,7 @@ static int uhci_enqueue ( struct uhci_ring *ring, struct io_buffer *iobuf,
 	return 0;
 
  err_unreachable_desc:
-	free_dma ( xfer->desc, len );
+	free_phys ( xfer->desc, len );
  err_alloc_desc:
 	free ( xfer );
  err_alloc_xfer:
@@ -337,7 +338,7 @@ static void uhci_describe ( struct uhci_ring *ring, void *data,
 			    UHCI_CONTROL_LEN ( frag_len ) );
 		desc->control = cpu_to_le32 ( control );
 		if ( data )
-			desc->data = virt_to_phys ( data );
+			desc->data = cpu_to_le32 ( virt_to_phys ( data ) );
 		wmb();
 		desc->status = UHCI_STATUS_ACTIVE;
 
@@ -377,7 +378,7 @@ static struct io_buffer * uhci_dequeue ( struct uhci_ring *ring ) {
 
 	/* Free transfer descriptors */
 	len = ( xfer->prod * sizeof ( xfer->desc[0] ) );
-	free_dma ( xfer->desc, len );
+	free_phys ( xfer->desc, len );
 
 	/* Free transfer */
 	free ( xfer );
@@ -849,7 +850,9 @@ static int uhci_endpoint_stream ( struct usb_endpoint *ep,
 
 	/* Calculate number of descriptors */
 	len = iob_len ( iobuf );
-	count = ( ( ( len + ring->mtu - 1 ) / ring->mtu ) + ( zlp ? 1 : 0 ) );
+	count = ( ( len + ring->mtu - 1 ) / ring->mtu );
+	if ( zlp || ( count == 0 ) )
+		count++;
 
 	/* Enqueue transfer */
 	if ( ( rc = uhci_enqueue ( ring, iobuf, count ) ) != 0 )
@@ -861,7 +864,7 @@ static int uhci_endpoint_stream ( struct usb_endpoint *ep,
 			( input ? USB_PID_IN : USB_PID_OUT ) );
 
 	/* Describe zero-length packet, if applicable */
-	if ( zlp )
+	if ( len && zlp )
 		uhci_describe ( ring, NULL, 0, USB_PID_OUT );
 
 	/* Sanity check */
@@ -1124,13 +1127,9 @@ static void uhci_hub_close ( struct usb_hub *hub __unused ) {
  * @v hub		USB hub
  * @ret rc		Return status code
  */
-static int uhci_root_open ( struct usb_hub *hub ) {
-	struct usb_bus *bus = hub->bus;
-	struct uhci_device *uhci = usb_bus_get_hostdata ( bus );
+static int uhci_root_open ( struct usb_hub *hub __unused) {
 
-	/* Record hub driver private data */
-	usb_hub_set_drvdata ( hub, uhci );
-
+	/* Nothing to do */
 	return 0;
 }
 
@@ -1139,10 +1138,9 @@ static int uhci_root_open ( struct usb_hub *hub ) {
  *
  * @v hub		USB hub
  */
-static void uhci_root_close ( struct usb_hub *hub ) {
+static void uhci_root_close ( struct usb_hub *hub __unused ) {
 
-	/* Clear hub driver private data */
-	usb_hub_set_drvdata ( hub, NULL );
+	/* Nothing to do */
 }
 
 /**
@@ -1317,7 +1315,7 @@ static int uhci_bus_open ( struct usb_bus *bus ) {
 	assert ( list_empty ( &uhci->periodic ) );
 
 	/* Allocate and initialise asynchronous queue head */
-	uhci->head = malloc_dma ( sizeof ( *uhci->head ), UHCI_ALIGN );
+	uhci->head = malloc_phys ( sizeof ( *uhci->head ), UHCI_ALIGN );
 	if ( ! uhci->head ) {
 		rc = -ENOMEM;
 		goto err_alloc_head;
@@ -1329,8 +1327,8 @@ static int uhci_bus_open ( struct usb_bus *bus ) {
 	uhci_async_schedule ( uhci );
 
 	/* Allocate periodic frame list */
-	uhci->frame = malloc_dma ( sizeof ( *uhci->frame ),
-				   sizeof ( *uhci->frame ) );
+	uhci->frame = malloc_phys ( sizeof ( *uhci->frame ),
+				    sizeof ( *uhci->frame ) );
 	if ( ! uhci->frame ) {
 		rc = -ENOMEM;
 		goto err_alloc_frame;
@@ -1348,10 +1346,10 @@ static int uhci_bus_open ( struct usb_bus *bus ) {
 
 	uhci_stop ( uhci );
  err_unreachable_frame:
-	free_dma ( uhci->frame, sizeof ( *uhci->frame ) );
+	free_phys ( uhci->frame, sizeof ( *uhci->frame ) );
  err_alloc_frame:
  err_unreachable_head:
-	free_dma ( uhci->head, sizeof ( *uhci->head ) );
+	free_phys ( uhci->head, sizeof ( *uhci->head ) );
  err_alloc_head:
 	return rc;
 }
@@ -1372,10 +1370,10 @@ static void uhci_bus_close ( struct usb_bus *bus ) {
 	uhci_stop ( uhci );
 
 	/* Free periodic frame list */
-	free_dma ( uhci->frame, sizeof ( *uhci->frame ) );
+	free_phys ( uhci->frame, sizeof ( *uhci->frame ) );
 
 	/* Free asynchronous schedule */
-	free_dma ( uhci->head, sizeof ( *uhci->head ) );
+	free_phys ( uhci->head, sizeof ( *uhci->head ) );
 }
 
 /**

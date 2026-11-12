@@ -18,6 +18,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /**
  * A UDP connection
@@ -257,7 +258,7 @@ static int udp_rx ( struct io_buffer *iobuf,
 		    struct net_device *netdev __unused,
 		    struct sockaddr_tcpip *st_src,
 		    struct sockaddr_tcpip *st_dest, uint16_t pshdr_csum ) {
-	struct udp_header *udphdr = iobuf->data;
+	struct udp_header *udphdr;
 	struct udp_connection *udp;
 	struct xfer_metadata meta;
 	size_t ulen;
@@ -268,10 +269,10 @@ static int udp_rx ( struct io_buffer *iobuf,
 	if ( iob_len ( iobuf ) < sizeof ( *udphdr ) ) {
 		DBG ( "UDP packet too short at %zd bytes (min %zd bytes)\n",
 		      iob_len ( iobuf ), sizeof ( *udphdr ) );
-		
 		rc = -EINVAL;
 		goto done;
 	}
+	udphdr = iobuf->data;
 	ulen = ntohs ( udphdr->len );
 	if ( ulen < sizeof ( *udphdr ) ) {
 		DBG ( "UDP length too short at %zd bytes "
@@ -396,17 +397,9 @@ static struct interface_descriptor udp_xfer_desc =
  ***************************************************************************
  */
 
-/** UDP IPv4 socket opener */
-struct socket_opener udp_ipv4_socket_opener __socket_opener = {
+/** UDP socket opener */
+struct socket_opener udp_socket_opener __socket_opener = {
 	.semantics	= UDP_SOCK_DGRAM,
-	.family		= AF_INET,
-	.open		= udp_open,
-};
-
-/** UDP IPv6 socket opener */
-struct socket_opener udp_ipv6_socket_opener __socket_opener = {
-	.semantics	= UDP_SOCK_DGRAM,
-	.family		= AF_INET6,
 	.open		= udp_open,
 };
 

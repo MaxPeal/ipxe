@@ -38,6 +38,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <wchar.h>
 #include <ipxe/string.h>
 #include <ipxe/test.h>
 
@@ -69,12 +70,20 @@ static void string_test_exec ( void ) {
 	ok ( *(strchr ( "Testing", 'e' )) == 'e' );
 	ok ( *(strchr ( "Testing", 'g' )) == 'g' );
 	ok ( strchr ( "Testing", 'x' ) == NULL );
+	ok ( *(strchr ( "Testing", '\0' )) == '\0' );
 
 	/* Test strrchr() */
 	ok ( strrchr ( "", 'a' ) == NULL );
 	ok ( *(strrchr ( "Haystack", 'a' )) == 'a' );
 	ok ( *(strrchr ( "Haystack", 'k' )) == 'k' );
 	ok ( strrchr ( "Haystack", 'x' ) == NULL );
+
+	/* Test strchrnul() */
+	ok ( *(strchrnul ( "", 'x' )) == '\0' );
+	ok ( *(strchrnul ( "Nonstandard", 's' )) == 's' );
+	ok ( *(strchrnul ( "Nonstandard", 't' )) == 't' );
+	ok ( *(strchrnul ( "Nonstandard", 'x' )) == '\0' );
+	ok ( *(strchrnul ( "Nonstandard", '\0' )) == '\0' );
 
 	/* Test memchr() */
 	ok ( memchr ( "", '\0', 0 ) == NULL );
@@ -88,6 +97,7 @@ static void string_test_exec ( void ) {
 	ok ( strcmp ( "Hello", "hello" ) != 0 );
 	ok ( strcmp ( "Hello", "Hello world!" ) != 0 );
 	ok ( strcmp ( "Hello world!", "Hello" ) != 0 );
+	ok ( strcmp ( "abc", "def" ) < 0 );
 
 	/* Test strncmp() */
 	ok ( strncmp ( "", "", 0 ) == 0 );
@@ -104,10 +114,19 @@ static void string_test_exec ( void ) {
 	ok ( strcasecmp ( "Uncle", "Uncle Jack" ) != 0 );
 	ok ( strcasecmp ( "not", "equal" ) != 0 );
 
+	/* Test strncasecmp() */
+	ok ( strncasecmp ( "", "", 0 ) == 0 );
+	ok ( strncasecmp ( "", "", 73 ) == 0 );
+	ok ( strncasecmp ( "Uncle Jack", "Uncle jack", 47 ) == 0 );
+	ok ( strncasecmp ( "Uncle Jack", "Uncle jake", 47 ) != 0 );
+	ok ( strncasecmp ( "Uncle Jack", "Uncle jake", 9 ) != 0 );
+	ok ( strncasecmp ( "Uncle Jack", "Uncle jake", 8 ) == 0 );
+
 	/* Test memcmp() */
 	ok ( memcmp ( "", "", 0 ) == 0 );
 	ok ( memcmp ( "Foo", "Foo", 3 ) == 0 );
 	ok ( memcmp ( "Foo", "Bar", 3 ) != 0 );
+	ok ( memcmp ( "abc", "def", 3 ) < 0 );
 
 	/* Test strstr() */
 	{
@@ -119,6 +138,19 @@ static void string_test_exec ( void ) {
 		found = strstr ( haystack, "me" );
 		ok ( found == &haystack[5] );
 		found = strstr ( haystack, "me." );
+		ok ( found == NULL );
+	}
+
+	/* Test strcasestr() */
+	{
+		const char haystack[] = "Find ME!";
+		char *found;
+
+		found = strcasestr ( haystack, "FIND" );
+		ok ( found == &haystack[0] );
+		found = strcasestr ( haystack, "me" );
+		ok ( found == &haystack[5] );
+		found = strcasestr ( haystack, "me." );
 		ok ( found == NULL );
 	}
 
@@ -192,6 +224,24 @@ static void string_test_exec ( void ) {
 		ok ( dup != NULL );
 		ok ( strcmp ( dup, "hello" ) == 0 );
 		free ( dup );
+	}
+
+	/* Test stpcpy() */
+	{
+		const char longer[12] = "duplicateme";
+		const char shorter[6] = "hello";
+		char dest[12];
+		char *dnul;
+
+		dnul = stpcpy ( dest, longer );
+		ok ( *dnul == '\0' );
+		ok ( dnul == &dest[11] );
+		ok ( memcmp ( dest, longer, 12 ) == 0 );
+		dnul = stpcpy ( dest, shorter );
+		ok ( *dnul == '\0' );
+		ok ( dnul == &dest[5] );
+		ok ( memcmp ( dest, shorter, 6 ) == 0 );
+		ok ( memcmp ( ( dest + 6 ), ( longer + 6 ), 6 ) == 0 );
 	}
 
 	/* Test strcpy() */
@@ -294,6 +344,23 @@ static void string_test_exec ( void ) {
 			 + 17 ) * 26 + 10 ) );
 		ok ( endp == &string[6] );
 	}
+
+	/* Test wcslen() */
+	ok ( wcslen ( L"" ) == 0 );
+	ok ( wcslen ( L"Helloo" ) == 6 );
+	ok ( wcslen ( L"Helloo woorld!" ) == 14 );
+	ok ( wcslen ( L"Helloo\0woorld!" ) == 6 );
+
+	/* Test wcsnlen() */
+	ok ( wcsnlen ( L"", 0 ) == 0 );
+	ok ( wcsnlen ( L"", 10 ) == 0 );
+	ok ( wcsnlen ( L"Helloo", 0 ) == 0 );
+	ok ( wcsnlen ( L"Helloo", 3 ) == 3 );
+	ok ( wcsnlen ( L"Helloo", 5 ) == 5 );
+	ok ( wcsnlen ( L"Helloo", 16 ) == 6 );
+	ok ( wcsnlen ( L"Helloo woorld!", 5 ) == 5 );
+	ok ( wcsnlen ( L"Helloo woorld!", 11 ) == 11 );
+	ok ( wcsnlen ( L"Helloo woorld!", 16 ) == 14 );
 }
 
 /** String self-test */

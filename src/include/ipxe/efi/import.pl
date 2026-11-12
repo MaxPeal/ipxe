@@ -67,25 +67,31 @@ sub try_import_file {
 	s/\s*$//g;
 	chomp;
 	# Update include lines, and record included files
-	if ( s/^\#include\s+[<\"](\S+)[>\"]/\#include <ipxe\/efi\/$1>/ ) {
-	  push @dependencies, $1;
+	if ( s/^(\s*\#include\s+)[<\"](\S+)[>\"]/$1<ipxe\/efi\/$2>/ ) {
+	  push @dependencies, $2;
 	}
 	# Check for BSD licence statement
-	if ( /^\s*THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE/ ) {
+	if ( /\s*SPDX-License-Identifier: BSD-2-Clause-Patent$/ ) {
 	  die "Licence detected after header guard\n" if $guard;
-	  $licence = "BSD3";
+	  $licence = "BSD2_PATENT";
 	}
 	# Write out line
 	print $outfh "$_\n";
-	# Apply FILE_LICENCE() immediately after include guard
-	if ( defined $maybe_guard && ! defined $guard ) {
-	  if ( /^\#define\s+_?_${maybe_guard}_?_$/ ) {
+	# Apply FILE_LICENCE()/FILE_SECBOOT() immediately after include guard
+	if ( ! defined $guard ) {
+	  if ( /^\#pragma\s+once$/ ) {
+	    $guard = $_;
+	  } elsif ( defined $maybe_guard && /^\#define\s+${maybe_guard}$/ ) {
 	    $guard = $maybe_guard;
-	    print $outfh "\nFILE_LICENCE ( $licence );\n" if $licence;
+	  }
+	  if ( defined $guard ) {
+	    print $outfh "\n";
+	    print $outfh "FILE_LICENCE ( $licence );\n" if $licence;
+	    print $outfh "FILE_SECBOOT ( PERMITTED );\n";
 	  }
 	  undef $maybe_guard;
 	}
-	if ( /^#ifndef\s+_?_(\S+)_?_/ ) {
+	if ( /^#ifndef\s+(_?_?\S+_?_)/ ) {
 	  $maybe_guard = $1;
 	}
       }
@@ -118,8 +124,9 @@ pod2usage ( 1 ) unless @ARGV == 1;
 my $edktop = shift;
 
 # Identify edk import directories
-my $edkdirs = [ "MdePkg/Include", "IntelFrameworkPkg/Include",
-		"MdeModulePkg/Include", "EdkCompatibilityPkg/Foundation" ];
+my $edkdirs = [ "MdePkg/Include", "MdeModulePkg/Include",
+		"NetworkPkg/Include", "EmbeddedPkg/Include",
+		"OvmfPkg/Include" ];
 foreach my $edkdir ( @$edkdirs ) {
   die "Directory \"$edktop\" does not appear to contain the EFI EDK2 "
       ."(missing \"$edkdir\")\n" unless -d catdir ( $edktop, $edkdir );

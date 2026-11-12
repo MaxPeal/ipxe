@@ -19,7 +19,7 @@ use Getopt::Long qw(GetOptions);
 GetOptions(
     'help'       => \( my $help     = 0      ),
     'format=s'   => \( my $format   = 'text' ),
-    'sort=s'     => \( my $sort     = 'bus,ipxe_driver,ipxe_name' ),
+    'sort=s'     => \( my $sort     = 'bus-,ipxe_driver,ipxe_name' ),
     'columns=s'  => \( my $columns  = 'bus,vendor_id,device_id,'
                                     . 'vendor_name,device_name,ipxe_driver,'
                                     . 'ipxe_name,ipxe_description,file,legacy_api'
@@ -47,26 +47,26 @@ Output formats:
 Column names (default order):
     bus, vendor_id, device_id, vendor_name, device_name,
     ipxe_driver, ipxe_name, ipxe_description, file, legacy_api
+
+Default sort order (minus at the end means reverse sort):
+    bus-, ipxe_driver, ipxe_name
 EOM
 
 # Only load runtime requirements if actually in use
-given($format) {
-    when( /csv/  ) {
-                       eval { require Text::CSV; };
-                       die("Please install Text::CSV CPAN module to use this feature.\n")
-                           if $@;
-                   }
-    when( /json/ ) {
-                       eval { require JSON; };
-                       die("Please install JSON CPAN module to use this feature.\n")
-                           if $@;
-                   }
-    when( /html/ ) {
-                       eval { require HTML::Entities; };
-                       die("Please install HTML::Entities CPAN module to use this feature.\n")
-                           if $@;
-                   }
-    default        { }
+if ( $format =~ /csv/ ) {
+    eval { require Text::CSV; };
+    die("Please install Text::CSV CPAN module to use this feature.\n")
+        if $@;
+}
+if ( $format =~ /json/ ) {
+    eval { require JSON; };
+    die("Please install JSON CPAN module to use this feature.\n")
+        if $@;
+}
+if ( $format =~ /html/ ) {
+    eval { require HTML::Entities; };
+    die("Please install HTML::Entities CPAN module to use this feature.\n")
+        if $@;
 }
 
 # Scan source dir and build NIC list
@@ -254,23 +254,27 @@ sub build_ipxe_nic_list {
     my $hex_id = qr/0 x [[:xdigit:]]{4} /x;
     my $quote = qr/ ['"] /x;
     my $non_space = qr/ [^\s] /x;
+    my $rom_decl = qr/^ \s* ( (PCI|ISA)_ROM \s*
+                        \( \s* .*? \s* \) \s* ) [,;]/msx;
     my $rom_line_counter = 0;
     foreach my $c_path ( sort @c_files ) {
         my $legacy = 0;
         open( my $fh, "<", $c_path );
+        my $content = do { local $/ = undef; <$fh> };
+        close($fh);
         my $c_file = $c_path;
         $c_file =~ s{^\Q$dir\E/?}{} if -d $dir; # Strip directory from reported filename
         my $ipxe_driver = basename($c_file, '.c');
-        while(<$fh>) {
-            # Most likely EtherBoot legacy API
-            $legacy = 1 if m/struct \s* nic \s*/x;
+        $legacy = 1 if $content =~ m/struct \s* nic \s*/x;
+        while( $content =~ m/$rom_decl/g ) {
+            local $_ = $1;
 
             # parse ISA|PCI_ROM lines into hashref and append to $ipxe_nic_list
-            next unless m/^ \s* (?:ISA|PCI)_ROM /x;
+            next unless m/^ \s* (?:ISA|PCI)_ROM /sx;
             $rom_line_counter++;
             chomp;
             #say; # for debugging regexp
-            if ( m/^ \s* ISA_ROM \s* \( \s* $quote ( .*? ) $quote \s* , \s* $quote ( .*? ) $quote \s* \) /x ) {
+            if ( m/^ \s* ISA_ROM \s* \( \s* $quote ( .*? ) $quote \s* , \s* $quote ( .*? ) $quote \s* \) /sx ) {
                 my $image = $1;
                 my $name = $2;
                 push @$ipxe_nic_list, {
@@ -283,7 +287,7 @@ sub build_ipxe_nic_list {
                 };
                 next;
             }
-            if ( m/^ \s* PCI_ROM \s* \( \s* ($hex_id) \s* , \s* ($hex_id) \s* , \s* $quote (.*?) $quote \s* , \s* $quote (.*?) $quote /x ) {
+            if ( m/^ \s* PCI_ROM \s* \( \s* ($hex_id) \s* , \s* ($hex_id) \s* , \s* $quote (.*?) $quote \s* , \s* $quote (.*?) $quote /sx ) {
                 my $vendor_id = lc $1;
                 my $device_id = lc $2;
                 my $name = $3;
@@ -301,7 +305,6 @@ sub build_ipxe_nic_list {
                 next;
             }
         }
-        close($fh);
     }
 
     # Verify all ROM lines where parsed properly
@@ -339,8 +342,16 @@ sub sort_ipxe_nic_list {
     my @sorted_list = @{ $ipxe_nic_list };
     while(@sort_column_names) {
         my $column_name = pop @sort_column_names;
-        @sorted_list = sort { ( $a->{$column_name} || "" ) cmp ( $b->{$column_name} || "" ) }
-                       @sorted_list;
+        my $reverse = substr($column_name, -1) eq '-' ? 1 : 0;  # use reverse order if last character is minus
+        $column_name = substr($column_name, 0, -1) if $reverse; # chop of the minus
+        if ( $reverse ) {
+            @sorted_list = sort { ( $b->{$column_name} || "" ) cmp ( $a->{$column_name} || "" ) }
+                           @sorted_list;
+        }
+        else {
+            @sorted_list = sort { ( $a->{$column_name} || "" ) cmp ( $b->{$column_name} || "" ) }
+                           @sorted_list;
+        }
     }
     return \@sorted_list;
 }
@@ -359,7 +370,7 @@ sub parse_columns_param {
 sub is_valid_column {
     my ($name) = @_;
     my $valid_column_map = {
-        map { $_ => 1 }
+        map { $_ => 1, $_ . "-" => 1 } # also supports keyword with a - suffix
         qw(
            bus file legacy_api
            ipxe_driver ipxe_name ipxe_description
@@ -557,7 +568,7 @@ EOM
     return join("\n", @output);
 }
 
-# Output NIC list in DokuWiki format (for http://ipxe.org)
+# Output NIC list in DokuWiki format (for https://ipxe.org)
 sub format_nic_list_dokuwiki {
     my ($nic_list, $column_names) = @_;
     my @output;

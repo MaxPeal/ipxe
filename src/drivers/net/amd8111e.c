@@ -105,8 +105,7 @@ struct amd8111e_priv {
 	struct nic *nic;
 	void *mmio;
 };
-
-static struct amd8111e_priv amd8111e;
+#define amd8111e NIC_FAKE_BSS ( struct amd8111e_priv )
 
 
 /********************************************************
@@ -609,7 +608,7 @@ static int amd8111e_poll(struct nic *nic, int retrieve)
 	return pkt_ok;
 }
 
-static void amd8111e_disable(struct nic *nic)
+static void amd8111e_disable(struct nic *nic, void *hwdev __unused)
 {
 	struct amd8111e_priv *lp = nic->priv_data;
 
@@ -664,7 +663,7 @@ static int amd8111e_probe(struct nic *nic, struct pci_device *pdev)
 	memset(lp, 0, sizeof(*lp));
 	lp->pdev = pdev;
 	lp->nic = nic;
-	lp->mmio = ioremap(mmio_start, mmio_len);
+	lp->mmio = pci_ioremap(pdev, mmio_start, mmio_len);
 	lp->opened = 1;
 	adjust_pci_device(pdev);
 
@@ -683,7 +682,7 @@ static struct pci_device_id amd8111e_nics[] = {
 PCI_DRIVER ( amd8111e_driver, amd8111e_nics, PCI_NO_CLASS );
 
 DRIVER ( "AMD8111E", nic_driver, pci_driver, amd8111e_driver,
-	 amd8111e_probe, amd8111e_disable );
+	 amd8111e_probe, amd8111e_disable, amd8111e );
 
 /*
  * Local variables:

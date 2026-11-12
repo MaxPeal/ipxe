@@ -6,6 +6,7 @@
 /** @file */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** Current console usage */
 int console_usage = CONSOLE_USAGE_STDOUT;
@@ -20,11 +21,12 @@ unsigned int console_height = CONSOLE_DEFAULT_HEIGHT;
  * Write a single character to each console device
  *
  * @v character		Character to be written
+ * @ret character	Character written
  *
  * The character is written out to all enabled console devices, using
  * each device's console_driver::putchar() method.
  */
-void putchar ( int character ) {
+int putchar ( int character ) {
 	struct console_driver *console;
 
 	/* Automatic LF -> CR,LF translation */
@@ -37,6 +39,8 @@ void putchar ( int character ) {
 		     console->putchar )
 			console->putchar ( character );
 	}
+
+	return character;
 }
 
 /**

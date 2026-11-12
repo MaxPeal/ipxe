@@ -22,9 +22,11 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdarg.h>
 #include <string.h>
+#include <strings.h>
 #include <errno.h>
 #include <ipxe/xfer.h>
 #include <ipxe/uri.h>
@@ -47,7 +49,7 @@ struct uri_opener * xfer_uri_opener ( const char *scheme ) {
 	struct uri_opener *opener;
 
 	for_each_table_entry ( opener, URI_OPENERS ) {
-		if ( strcmp ( scheme, opener->scheme ) == 0 )
+		if ( strcasecmp ( scheme, opener->scheme ) == 0 )
 			return opener;
 	}
 	return NULL;
@@ -75,6 +77,14 @@ int xfer_open_uri ( struct interface *intf, struct uri *uri ) {
 		goto err_resolve_uri;
 	}
 
+	/* Check that URI has a scheme */
+	if ( ! uri_is_absolute ( resolved_uri ) ) {
+		DBGC ( INTF_COL ( intf ), "INTF " INTF_FMT " attempted to open "
+		       "non-absolute URI\n", INTF_DBG ( intf ) );
+		rc = -ENOTSUP;
+		goto err_absolute;
+	}
+
 	/* Find opener which supports this URI scheme */
 	opener = xfer_uri_opener ( resolved_uri->scheme );
 	if ( ! opener ) {
@@ -96,6 +106,7 @@ int xfer_open_uri ( struct interface *intf, struct uri *uri ) {
 
  err_open:
  err_opener:
+ err_absolute:
 	uri_put ( resolved_uri );
  err_resolve_uri:
 	return rc;
@@ -147,10 +158,8 @@ int xfer_open_socket ( struct interface *intf, int semantics,
 	       socket_family_name ( peer->sa_family ) );
 
 	for_each_table_entry ( opener, SOCKET_OPENERS ) {
-		if ( ( opener->semantics == semantics ) &&
-		     ( opener->family == peer->sa_family ) ) {
+		if ( opener->semantics == semantics )
 			return opener->open ( intf, peer, local );
-		}
 	}
 
 	DBGC ( INTF_COL ( intf ), "INTF " INTF_FMT " attempted to open "

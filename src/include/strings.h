@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <bits/strings.h>
@@ -189,5 +190,7 @@ bzero ( void *dest, size_t len ) {
 }
 
 int __pure strcasecmp ( const char *first, const char *second ) __nonnull;
+int __pure strncasecmp ( const char *first, const char *second,
+			 size_t max ) __nonnull;
 
 #endif /* _STRINGS_H */

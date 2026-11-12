@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <errno.h>
@@ -180,7 +181,7 @@ static int icmpv6_rx ( struct io_buffer *iobuf, struct net_device *netdev,
 		       struct sockaddr_tcpip *st_dest, uint16_t pshdr_csum ) {
 	struct sockaddr_in6 *sin6_src = ( ( struct sockaddr_in6 * ) st_src );
 	struct sockaddr_in6 *sin6_dest = ( ( struct sockaddr_in6 * ) st_dest );
-	struct icmp_header *icmp = iobuf->data;
+	struct icmp_header *icmp;
 	size_t len = iob_len ( iobuf );
 	struct icmpv6_handler *handler;
 	unsigned int csum;
@@ -193,6 +194,7 @@ static int icmpv6_rx ( struct io_buffer *iobuf, struct net_device *netdev,
 		rc = -EINVAL;
 		goto done;
 	}
+	icmp = iobuf->data;
 
 	/* Verify checksum */
 	csum = tcpip_continue_chksum ( pshdr_csum, icmp, len );

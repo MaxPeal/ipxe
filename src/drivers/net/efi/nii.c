@@ -22,13 +22,16 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <strings.h>
+#include <stdlib.h>
 #include <unistd.h>
 #include <errno.h>
 #include <ipxe/netdevice.h>
 #include <ipxe/ethernet.h>
+#include <ipxe/if_ether.h>
 #include <ipxe/umalloc.h>
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/efi_driver.h>
@@ -137,6 +140,16 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 #define PCI_MAX_BAR 6
 
+/** An NII memory mapping */
+struct nii_mapping {
+	/** List of mappings */
+	struct list_head list;
+	/** Mapped address */
+	UINT64 addr;
+	/** Mapping cookie created by PCI I/O protocol */
+	VOID *mapping;
+};
+
 /** An NII NIC */
 struct nii_nic {
 	/** EFI device */
@@ -165,7 +178,7 @@ struct nii_nic {
 	size_t mtu;
 
 	/** Hardware transmit/receive buffer */
-	userptr_t buffer;
+	void *buffer;
 	/** Hardware transmit/receive buffer length */
 	size_t buffer_len;
 
@@ -179,6 +192,9 @@ struct nii_nic {
 	struct io_buffer *txbuf;
 	/** Current receive buffer */
 	struct io_buffer *rxbuf;
+
+	/** Mapping list */
+	struct list_head mappings;
 };
 
 /** Maximum number of received packets per poll */
@@ -195,10 +211,6 @@ static int nii_pci_open ( struct nii_nic *nii ) {
 	EFI_HANDLE device = nii->efidev->device;
 	EFI_HANDLE pci_device;
 	union {
-		EFI_PCI_IO_PROTOCOL *pci_io;
-		void *interface;
-	} pci_io;
-	union {
 		EFI_ACPI_ADDRESS_SPACE_DESCRIPTOR *acpi;
 		void *resource;
 	} desc;
@@ -208,24 +220,25 @@ static int nii_pci_open ( struct nii_nic *nii ) {
 
 	/* Locate PCI I/O protocol */
 	if ( ( rc = efi_locate_device ( device, &efi_pci_io_protocol_guid,
-					&pci_device ) ) != 0 ) {
+					&pci_device, 0 ) ) != 0 ) {
 		DBGC ( nii, "NII %s could not locate PCI I/O protocol: %s\n",
 		       nii->dev.name, strerror ( rc ) );
 		goto err_locate;
 	}
 	nii->pci_device = pci_device;
 
-	/* Open PCI I/O protocol */
-	if ( ( efirc = bs->OpenProtocol ( pci_device, &efi_pci_io_protocol_guid,
-					  &pci_io.interface, efi_image_handle,
-					  device,
-					  EFI_OPEN_PROTOCOL_GET_PROTOCOL ))!=0){
-		rc = -EEFI ( efirc );
+	/* Open PCI I/O protocol
+	 *
+	 * We cannot open this safely as a by-driver open, since doing
+	 * so would disconnect the underlying NII driver.  We must
+	 * therefore use an unsafe open.
+	 */
+	if ( ( rc = efi_open_unsafe ( pci_device, &efi_pci_io_protocol_guid,
+				      &nii->pci_io ) ) != 0 ) {
 		DBGC ( nii, "NII %s could not open PCI I/O protocol: %s\n",
 		       nii->dev.name, strerror ( rc ) );
 		goto err_open;
 	}
-	nii->pci_io = pci_io.pci_io;
 
 	/* Identify memory and I/O BARs */
 	nii->mem_bar = PCI_MAX_BAR;
@@ -265,8 +278,7 @@ static int nii_pci_open ( struct nii_nic *nii ) {
 	return 0;
 
  err_get_bar_attributes:
-	bs->CloseProtocol ( pci_device, &efi_pci_io_protocol_guid,
-			    efi_image_handle, device );
+	efi_close_unsafe ( pci_device, &efi_pci_io_protocol_guid );
  err_open:
  err_locate:
 	return rc;
@@ -279,10 +291,20 @@ static int nii_pci_open ( struct nii_nic *nii ) {
  * @ret rc		Return status code
  */
 static void nii_pci_close ( struct nii_nic *nii ) {
-	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
+	struct nii_mapping *map;
+	struct nii_mapping *tmp;
 
-	bs->CloseProtocol ( nii->pci_device, &efi_pci_io_protocol_guid,
-			    efi_image_handle, nii->efidev->device );
+	/* Remove any stale mappings */
+	list_for_each_entry_safe ( map, tmp, &nii->mappings, list ) {
+		DBGC ( nii, "NII %s removing stale mapping %#llx\n",
+		       nii->dev.name, ( ( unsigned long long ) map->addr ) );
+		nii->pci_io->Unmap ( nii->pci_io, map->mapping );
+		list_del ( &map->list );
+		free ( map );
+	}
+
+	/* Close protocols */
+	efi_close_unsafe ( nii->pci_device, &efi_pci_io_protocol_guid );
 }
 
 /**
@@ -329,6 +351,139 @@ static EFIAPI VOID nii_io ( UINT64 unique_id, UINT8 op, UINT8 len, UINT64 addr,
 		/* No way to report failure */
 		return;
 	}
+}
+
+/**
+ * Map callback
+ *
+ * @v unique_id		NII NIC
+ * @v addr		Address of memory to be mapped
+ * @v len		Length of memory to be mapped
+ * @v dir		Direction of data flow
+ * @v mapped		Device mapped address to fill in
+ */
+static EFIAPI VOID nii_map ( UINT64 unique_id, UINT64 addr, UINT32 len,
+			     UINT32 dir, UINT64 mapped ) {
+	struct nii_nic *nii = ( ( void * ) ( intptr_t ) unique_id );
+	EFI_PHYSICAL_ADDRESS *phys = ( ( void * ) ( intptr_t ) mapped );
+	EFI_PCI_IO_PROTOCOL_OPERATION op;
+	struct nii_mapping *map;
+	UINTN count = len;
+	EFI_STATUS efirc;
+	int rc;
+
+	/* Return a zero mapped address on failure */
+	*phys = 0;
+
+	/* Determine PCI mapping operation */
+	switch ( dir ) {
+	case TO_AND_FROM_DEVICE:
+		op = EfiPciIoOperationBusMasterCommonBuffer;
+		break;
+	case FROM_DEVICE:
+		op = EfiPciIoOperationBusMasterWrite;
+		break;
+	case TO_DEVICE:
+		op = EfiPciIoOperationBusMasterRead;
+		break;
+	default:
+		DBGC ( nii, "NII %s unsupported mapping direction %d\n",
+		       nii->dev.name, dir );
+		goto err_dir;
+	}
+
+	/* Allocate a mapping record */
+	map = zalloc ( sizeof ( *map ) );
+	if ( ! map )
+		goto err_alloc;
+	map->addr = addr;
+
+	/* Create map */
+	if ( ( efirc = nii->pci_io->Map ( nii->pci_io, op,
+					  ( ( void * ) ( intptr_t ) addr ),
+					  &count, phys, &map->mapping ) ) != 0){
+		rc = -EEFI ( efirc );
+		DBGC ( nii, "NII %s map operation failed: %s\n",
+		       nii->dev.name, strerror ( rc ) );
+		goto err_map;
+	}
+
+	/* Add to list of mappings */
+	list_add ( &map->list, &nii->mappings );
+	DBGC2 ( nii, "NII %s mapped %#llx+%#x->%#llx\n",
+		nii->dev.name, ( ( unsigned long long ) addr ),
+		len, ( ( unsigned long long ) *phys ) );
+	return;
+
+	list_del ( &map->list );
+ err_map:
+	free ( map );
+ err_alloc:
+ err_dir:
+	return;
+}
+
+/**
+ * Unmap callback
+ *
+ * @v unique_id		NII NIC
+ * @v addr		Address of mapped memory
+ * @v len		Length of mapped memory
+ * @v dir		Direction of data flow
+ * @v mapped		Device mapped address
+ */
+static EFIAPI VOID nii_unmap ( UINT64 unique_id, UINT64 addr, UINT32 len,
+			       UINT32 dir __unused, UINT64 mapped ) {
+	struct nii_nic *nii = ( ( void * ) ( intptr_t ) unique_id );
+	struct nii_mapping *map;
+
+	/* Locate mapping record */
+	list_for_each_entry ( map, &nii->mappings, list ) {
+		if ( map->addr == addr ) {
+			nii->pci_io->Unmap ( nii->pci_io, map->mapping );
+			list_del ( &map->list );
+			free ( map );
+			DBGC2 ( nii, "NII %s unmapped %#llx+%#x->%#llx\n",
+				nii->dev.name, ( ( unsigned long long ) addr ),
+				len, ( ( unsigned long long ) mapped ) );
+			return;
+		}
+	}
+
+	DBGC ( nii, "NII %s non-existent mapping %#llx+%#x->%#llx\n",
+	       nii->dev.name, ( ( unsigned long long ) addr ),
+	       len, ( ( unsigned long long ) mapped ) );
+}
+
+/**
+ * Sync callback
+ *
+ * @v unique_id		NII NIC
+ * @v addr		Address of mapped memory
+ * @v len		Length of mapped memory
+ * @v dir		Direction of data flow
+ * @v mapped		Device mapped address
+ */
+static EFIAPI VOID nii_sync ( UINT64 unique_id __unused, UINT64 addr,
+			      UINT32 len, UINT32 dir, UINT64 mapped ) {
+	const void *src;
+	void *dst;
+
+	/* Do nothing if this is an identity mapping */
+	if ( addr == mapped )
+		return;
+
+	/* Determine direction */
+	if ( dir == FROM_DEVICE ) {
+		src = ( ( void * ) ( intptr_t ) mapped );
+		dst = ( ( void * ) ( intptr_t ) addr );
+	} else {
+		src = ( ( void * ) ( intptr_t ) addr );
+		dst = ( ( void * ) ( intptr_t ) mapped );
+	}
+
+	/* Copy data */
+	memcpy ( dst, src, len );
 }
 
 /**
@@ -417,7 +572,7 @@ static int nii_issue_cpb_db ( struct nii_nic *nii, unsigned int op, void *cpb,
 	cdb.IFnum = nii->nii->IfNum;
 
 	/* Raise task priority level */
-	tpl = bs->RaiseTPL ( TPL_CALLBACK );
+	tpl = bs->RaiseTPL ( efi_internal_tpl );
 
 	/* Issue command */
 	DBGC2 ( nii, "NII %s issuing %02x:%04x ifnum %d%s%s\n",
@@ -499,6 +654,9 @@ static int nii_start_undi ( struct nii_nic *nii ) {
 	cpb.Delay = ( ( intptr_t ) nii_delay );
 	cpb.Block = ( ( intptr_t ) nii_block );
 	cpb.Mem_IO = ( ( intptr_t ) nii_io );
+	cpb.Map_Mem = ( ( intptr_t ) nii_map );
+	cpb.UnMap_Mem = ( ( intptr_t ) nii_unmap );
+	cpb.Sync_Mem = ( ( intptr_t ) nii_sync );
 	cpb.Unique_ID = ( ( intptr_t ) nii );
 
 	/* Issue command */
@@ -627,6 +785,20 @@ static int nii_initialise_flags ( struct nii_nic *nii, unsigned int flags ) {
 }
 
 /**
+ * Initialise UNDI with cable detection
+ *
+ * @v nii		NII NIC
+ * @ret rc		Return status code
+ */
+static int nii_initialise_cable ( struct nii_nic *nii ) {
+	unsigned int flags;
+
+	/* Initialise UNDI */
+	flags = PXE_OPFLAGS_INITIALIZE_DETECT_CABLE;
+	return nii_initialise_flags ( nii, flags );
+}
+
+/**
  * Initialise UNDI
  *
  * @v nii		NII NIC
@@ -745,18 +917,17 @@ static int nii_set_station_address ( struct nii_nic *nii,
  * Set receive filters
  *
  * @v nii		NII NIC
+ * @v flags		Flags
  * @ret rc		Return status code
  */
-static int nii_set_rx_filters ( struct nii_nic *nii ) {
+static int nii_set_rx_filters ( struct nii_nic *nii, unsigned int flags ) {
 	uint32_t implementation = nii->undi->Implementation;
-	unsigned int flags;
 	unsigned int op;
 	int stat;
 	int rc;
 
 	/* Construct receive filter set */
-	flags = ( PXE_OPFLAGS_RECEIVE_FILTER_ENABLE |
-		  PXE_OPFLAGS_RECEIVE_FILTER_UNICAST );
+	flags |= PXE_OPFLAGS_RECEIVE_FILTER_UNICAST;
 	if ( implementation & PXE_ROMID_IMP_BROADCAST_RX_SUPPORTED )
 		flags |= PXE_OPFLAGS_RECEIVE_FILTER_BROADCAST;
 	if ( implementation & PXE_ROMID_IMP_PROMISCUOUS_RX_SUPPORTED )
@@ -768,12 +939,38 @@ static int nii_set_rx_filters ( struct nii_nic *nii ) {
 	op = NII_OP ( PXE_OPCODE_RECEIVE_FILTERS, flags );
 	if ( ( stat = nii_issue ( nii, op ) ) < 0 ) {
 		rc = -EIO_STAT ( stat );
-		DBGC ( nii, "NII %s could not set receive filters %#04x: %s\n",
-		       nii->dev.name, flags, strerror ( rc ) );
+		DBGC ( nii, "NII %s could not %s%sable receive filters "
+		       "%#04x: %s\n", nii->dev.name,
+		       ( ( flags & PXE_OPFLAGS_RECEIVE_FILTER_ENABLE ) ?
+			 "en" : "" ),
+		       ( ( flags & PXE_OPFLAGS_RECEIVE_FILTER_DISABLE ) ?
+			 "dis" : "" ), flags, strerror ( rc ) );
 		return rc;
 	}
 
 	return 0;
+}
+
+/**
+ * Enable receive filters
+ *
+ * @v nii		NII NIC
+ * @ret rc		Return status code
+ */
+static int nii_enable_rx_filters ( struct nii_nic *nii ) {
+
+	return nii_set_rx_filters ( nii, PXE_OPFLAGS_RECEIVE_FILTER_ENABLE );
+}
+
+/**
+ * Disable receive filters
+ *
+ * @v nii		NII NIC
+ * @ret rc		Return status code
+ */
+static int nii_disable_rx_filters ( struct nii_nic *nii ) {
+
+	return nii_set_rx_filters ( nii, PXE_OPFLAGS_RECEIVE_FILTER_DISABLE );
 }
 
 /**
@@ -797,11 +994,16 @@ static int nii_transmit ( struct net_device *netdev,
 		return 0;
 	}
 
+	/* Pad to minimum Ethernet length, to work around underlying
+	 * drivers that do not correctly handle frame padding
+	 * themselves.
+	 */
+	iob_pad ( iobuf, ETH_ZLEN );
+
 	/* Construct parameter block */
 	memset ( &cpb, 0, sizeof ( cpb ) );
-	cpb.FrameAddr = virt_to_bus ( iobuf->data );
+	cpb.FrameAddr = ( ( intptr_t ) iobuf->data );
 	cpb.DataLen = iob_len ( iobuf );
-	cpb.MediaheaderLen = netdev->ll_protocol->ll_header_len;
 
 	/* Transmit packet */
 	op = NII_OP ( PXE_OPCODE_TRANSMIT,
@@ -832,8 +1034,9 @@ static void nii_poll_tx ( struct net_device *netdev, unsigned int stat ) {
 	if ( stat & PXE_STATFLAGS_GET_STATUS_NO_TXBUFS_WRITTEN )
 		return;
 
-	/* Sanity check */
-	assert ( nii->txbuf != NULL );
+	/* Ignore spurious completions reported by some devices */
+	if ( ! nii->txbuf )
+		return;
 
 	/* Complete transmission */
 	iobuf = nii->txbuf;
@@ -868,7 +1071,7 @@ static void nii_poll_rx ( struct net_device *netdev ) {
 
 		/* Construct parameter block */
 		memset ( &cpb, 0, sizeof ( cpb ) );
-		cpb.BufferAddr = virt_to_bus ( nii->rxbuf->data );
+		cpb.BufferAddr = ( ( intptr_t ) nii->rxbuf->data );
 		cpb.BufferLen = iob_tailroom ( nii->rxbuf );
 
 		/* Issue command */
@@ -931,7 +1134,7 @@ static void nii_poll ( struct net_device *netdev ) {
 	/* Get status */
 	op = NII_OP ( PXE_OPCODE_GET_STATUS,
 		      ( PXE_OPFLAGS_GET_INTERRUPT_STATUS |
-			( nii->txbuf ? PXE_OPFLAGS_GET_TRANSMITTED_BUFFERS : 0)|
+			PXE_OPFLAGS_GET_TRANSMITTED_BUFFERS |
 			( nii->media ? PXE_OPFLAGS_GET_MEDIA_STATUS : 0 ) ) );
 	if ( ( stat = nii_issue_db ( nii, op, &db, sizeof ( db ) ) ) < 0 ) {
 		rc = -EIO_STAT ( stat );
@@ -941,8 +1144,7 @@ static void nii_poll ( struct net_device *netdev ) {
 	}
 
 	/* Process any TX completions */
-	if ( nii->txbuf )
-		nii_poll_tx ( netdev, stat );
+	nii_poll_tx ( netdev, stat );
 
 	/* Process any RX completions */
 	nii_poll_rx ( netdev );
@@ -960,7 +1162,6 @@ static void nii_poll ( struct net_device *netdev ) {
  */
 static int nii_open ( struct net_device *netdev ) {
 	struct nii_nic *nii = netdev->priv;
-	unsigned int flags;
 	int rc;
 
 	/* Initialise NIC
@@ -978,15 +1179,21 @@ static int nii_open ( struct net_device *netdev ) {
 	 * presence during initialisation on links that are physically
 	 * slow to reach link-up.
 	 *
-	 * Attempt to work around both of these problems by requesting
-	 * cable detection at this point if any only if the driver is
-	 * not capable of reporting link status changes at runtime via
-	 * PXE_OPCODE_GET_STATUS.
+	 * Attempt to work around both of these problems by first
+	 * attempting to initialise with cable presence detection,
+	 * then falling back to initialising without cable presence
+	 * detection.
 	 */
-	flags = ( nii->media ? PXE_OPFLAGS_INITIALIZE_DO_NOT_DETECT_CABLE
-		  : PXE_OPFLAGS_INITIALIZE_DETECT_CABLE );
-	if ( ( rc = nii_initialise_flags ( nii, flags ) ) != 0 )
-		goto err_initialise;
+	if ( ( rc = nii_initialise_cable ( nii ) ) != 0 ) {
+		DBGC ( nii, "NII %s could not initialise with cable "
+		       "detection: %s\n", nii->dev.name, strerror ( rc ) );
+		if ( ( rc = nii_initialise ( nii ) ) != 0 ) {
+			DBGC ( nii, "NII %s could not initialise without "
+			       "cable detection: %s\n",
+			       nii->dev.name, strerror ( rc ) );
+			goto err_initialise;
+		}
+	}
 
 	/* Attempt to set station address */
 	if ( ( rc = nii_set_station_address ( nii, netdev ) ) != 0 ) {
@@ -995,13 +1202,25 @@ static int nii_open ( struct net_device *netdev ) {
 		/* Treat as non-fatal */
 	}
 
-	/* Set receive filters */
-	if ( ( rc = nii_set_rx_filters ( nii ) ) != 0 )
-		goto err_set_rx_filters;
+	/* Disable receive filters
+	 *
+	 * We have no reason to disable receive filters here (or
+	 * anywhere), but some NII drivers have a bug which prevents
+	 * packets from being received unless we attempt to disable
+	 * the receive filters.
+	 *
+	 * Ignore any failures, since we genuinely don't care if the
+	 * NII driver cannot disable the filters.
+	 */
+	nii_disable_rx_filters ( nii );
+
+	/* Enable receive filters */
+	if ( ( rc = nii_enable_rx_filters ( nii ) ) != 0 )
+		goto err_enable_rx_filters;
 
 	return 0;
 
- err_set_rx_filters:
+ err_enable_rx_filters:
 	nii_shutdown ( nii );
  err_initialise:
 	return rc;
@@ -1040,18 +1259,35 @@ static struct net_device_operations nii_operations = {
 };
 
 /**
+ * Exclude existing drivers
+ *
+ * @v device		EFI device handle
+ * @ret rc		Return status code
+ */
+int nii_exclude ( EFI_HANDLE device ) {
+	EFI_GUID *protocol = &efi_nii31_protocol_guid;
+	int rc;
+
+	/* Exclude existing NII protocol drivers */
+	if ( ( rc = efi_driver_exclude ( device, protocol ) ) != 0 ) {
+		DBGC ( device, "NII %s could not exclude drivers: %s\n",
+		       efi_handle_name ( device ), strerror ( rc ) );
+		return rc;
+	}
+
+	return 0;
+}
+
+/**
  * Attach driver to device
  *
  * @v efidev		EFI device
  * @ret rc		Return status code
  */
 int nii_start ( struct efi_device *efidev ) {
-	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	EFI_HANDLE device = efidev->device;
 	struct net_device *netdev;
 	struct nii_nic *nii;
-	void *interface;
-	EFI_STATUS efirc;
 	int rc;
 
 	/* Allocate and initialise structure */
@@ -1063,6 +1299,7 @@ int nii_start ( struct efi_device *efidev ) {
 	netdev_init ( netdev, &nii_operations );
 	nii = netdev->priv;
 	nii->efidev = efidev;
+	INIT_LIST_HEAD ( &nii->mappings );
 	netdev->ll_broadcast = nii->broadcast;
 	efidev_set_drvdata ( efidev, netdev );
 
@@ -1075,17 +1312,13 @@ int nii_start ( struct efi_device *efidev ) {
 	netdev->dev = &nii->dev;
 
 	/* Open NII protocol */
-	if ( ( efirc = bs->OpenProtocol ( device, &efi_nii31_protocol_guid,
-					  &interface, efi_image_handle, device,
-					  ( EFI_OPEN_PROTOCOL_BY_DRIVER |
-					    EFI_OPEN_PROTOCOL_EXCLUSIVE )))!=0){
-		rc = -EEFI ( efirc );
+	if ( ( rc = efi_open_by_driver ( device, &efi_nii31_protocol_guid,
+					 &nii->nii ) ) != 0 ) {
 		DBGC ( nii, "NII %s cannot open NII protocol: %s\n",
 		       nii->dev.name, strerror ( rc ) );
 		DBGC_EFI_OPENERS ( device, device, &efi_nii31_protocol_guid );
 		goto err_open_protocol;
 	}
-	nii->nii = interface;
 
 	/* Locate UNDI and entry point */
 	nii->undi = ( ( void * ) ( intptr_t ) nii->nii->Id );
@@ -1148,8 +1381,7 @@ int nii_start ( struct efi_device *efidev ) {
  err_pci_open:
  err_hw_undi:
  err_no_undi:
-	bs->CloseProtocol ( device, &efi_nii31_protocol_guid,
-			    efi_image_handle, device );
+	efi_close_by_driver ( device, &efi_nii31_protocol_guid );
  err_open_protocol:
 	list_del ( &nii->dev.siblings );
 	netdev_nullify ( netdev );
@@ -1164,7 +1396,6 @@ int nii_start ( struct efi_device *efidev ) {
  * @v efidev		EFI device
  */
 void nii_stop ( struct efi_device *efidev ) {
-	EFI_BOOT_SERVICES *bs = efi_systab->BootServices;
 	struct net_device *netdev = efidev_get_drvdata ( efidev );
 	struct nii_nic *nii = netdev->priv;
 	EFI_HANDLE device = efidev->device;
@@ -1179,8 +1410,7 @@ void nii_stop ( struct efi_device *efidev ) {
 	nii_pci_close ( nii );
 
 	/* Close NII protocol */
-	bs->CloseProtocol ( device, &efi_nii31_protocol_guid,
-			    efi_image_handle, device );
+	efi_close_by_driver ( device, &efi_nii31_protocol_guid );
 
 	/* Free network device */
 	list_del ( &nii->dev.siblings );

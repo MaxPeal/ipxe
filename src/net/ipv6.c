@@ -18,6 +18,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <stdio.h>
@@ -251,7 +252,7 @@ int ipv6_add_miniroute ( struct net_device *netdev, struct in6_addr *address,
 			*prefix_mask = 0xff;
 		}
 		if ( remaining )
-			*prefix_mask <<= ( 8 - remaining );
+			*prefix_mask = ( 0xff << ( 8 - remaining ) );
 	}
 
 	/* Add to start of routing table */
@@ -330,7 +331,7 @@ struct ipv6_miniroute * ipv6_route ( unsigned int scope_id,
 		/* Skip entries with a non-matching scope ID, if
 		 * destination specifies a scope ID.
 		 */
-		if ( scope_id && ( miniroute->netdev->index != scope_id ) )
+		if ( scope_id && ( miniroute->netdev->scope_id != scope_id ) )
 			continue;
 
 		/* Skip entries that are out of scope */
@@ -617,8 +618,8 @@ static int ipv6_tx ( struct io_buffer *iobuf,
 			return rc;
 		}
 	} else {
-		if ( ( rc = ndp_tx ( iobuf, netdev, next_hop, &iphdr->src,
-				     netdev->ll_addr ) ) != 0 ) {
+		if ( ( rc = ndp_tx ( iobuf, netdev, next_hop,
+				     &iphdr->src ) ) != 0 ) {
 			DBGC ( ipv6col ( &iphdr->dest ), "IPv6 could not "
 			       "transmit packet via %s: %s\n",
 			       netdev->name, strerror ( rc ) );
@@ -650,7 +651,7 @@ static int ipv6_rx ( struct io_buffer *iobuf, struct net_device *netdev,
 		     const void *ll_dest __unused,
 		     const void *ll_source __unused,
 		     unsigned int flags __unused ) {
-	struct ipv6_header *iphdr = iobuf->data;
+	struct ipv6_header *iphdr;
 	union ipv6_extension_header *ext;
 	union {
 		struct sockaddr_in6 sin6;
@@ -675,12 +676,12 @@ static int ipv6_rx ( struct io_buffer *iobuf, struct net_device *netdev,
 
 	/* Sanity check the IPv6 header */
 	if ( iob_len ( iobuf ) < sizeof ( *iphdr ) ) {
-		DBGC ( ipv6col ( &iphdr->src ), "IPv6 packet too short at %zd "
-		       "bytes (min %zd bytes)\n", iob_len ( iobuf ),
-		       sizeof ( *iphdr ) );
+		DBGC ( netdev, "IPv6 packet too short at %zd bytes (min %zd "
+		       "bytes)\n", iob_len ( iobuf ), sizeof ( *iphdr ) );
 		rc = -EINVAL_LEN;
 		goto err_header;
 	}
+	iphdr = iobuf->data;
 	if ( ( iphdr->ver_tc_label & htonl ( IPV6_MASK_VER ) ) !=
 	     htonl ( IPV6_VER ) ) {
 		DBGC ( ipv6col ( &iphdr->src ), "IPv6 version %#08x not "
@@ -690,7 +691,7 @@ static int ipv6_rx ( struct io_buffer *iobuf, struct net_device *netdev,
 	}
 
 	/* Truncate packet to specified length */
-	len = ntohs ( iphdr->len );
+	len = ( sizeof ( *iphdr ) + ntohs ( iphdr->len ) );
 	if ( len > iob_len ( iobuf ) ) {
 		DBGC ( ipv6col ( &iphdr->src ), "IPv6 length too long at %zd "
 		       "bytes (packet is %zd bytes)\n", len, iob_len ( iobuf ));
@@ -698,7 +699,7 @@ static int ipv6_rx ( struct io_buffer *iobuf, struct net_device *netdev,
 		rc = -EINVAL_LEN;
 		goto err_other;
 	}
-	iob_unput ( iobuf, ( iob_len ( iobuf ) - len - sizeof ( *iphdr ) ) );
+	iob_unput ( iobuf, ( iob_len ( iobuf ) - len ) );
 	hdrlen = sizeof ( *iphdr );
 
 	/* Print IPv6 header for debugging */
@@ -789,12 +790,12 @@ static int ipv6_rx ( struct io_buffer *iobuf, struct net_device *netdev,
 	src.sin6.sin6_family = AF_INET6;
 	memcpy ( &src.sin6.sin6_addr, &iphdr->src,
 		 sizeof ( src.sin6.sin6_addr ) );
-	src.sin6.sin6_scope_id = netdev->index;
+	src.sin6.sin6_scope_id = netdev->scope_id;
 	memset ( &dest, 0, sizeof ( dest ) );
 	dest.sin6.sin6_family = AF_INET6;
 	memcpy ( &dest.sin6.sin6_addr, &iphdr->dest,
 		 sizeof ( dest.sin6.sin6_addr ) );
-	dest.sin6.sin6_scope_id = netdev->index;
+	dest.sin6.sin6_scope_id = netdev->scope_id;
 	iob_pull ( iobuf, hdrlen );
 	pshdr_csum = ipv6_pshdr_chksum ( iphdr, iob_len ( iobuf ),
 					 next_header, TCPIP_EMPTY_CSUM );
@@ -957,7 +958,7 @@ static const char * ipv6_sock_ntoa ( struct sockaddr *sa ) {
 
 	/* Identify network device, if applicable */
 	if ( IN6_IS_ADDR_LINKLOCAL ( in ) || IN6_IS_ADDR_MULTICAST ( in ) ) {
-		netdev = find_netdev_by_index ( sin6->sin6_scope_id );
+		netdev = find_netdev_by_scope_id ( sin6->sin6_scope_id );
 		netdev_name = ( netdev ? netdev->name : "UNKNOWN" );
 	} else {
 		netdev_name = NULL;
@@ -1020,7 +1021,7 @@ static int ipv6_sock_aton ( const char *string, struct sockaddr *sa ) {
 			rc = -ENODEV;
 			goto err_find_netdev;
 		}
-		sin6->sin6_scope_id = netdev->index;
+		sin6->sin6_scope_id = netdev->scope_id;
 
 	} else if ( IN6_IS_ADDR_LINKLOCAL ( &in ) ||
 		    IN6_IS_ADDR_MULTICAST ( &in ) ) {
@@ -1031,7 +1032,7 @@ static int ipv6_sock_aton ( const char *string, struct sockaddr *sa ) {
 		 */
 		netdev = last_opened_netdev();
 		if ( netdev )
-			sin6->sin6_scope_id = netdev->index;
+			sin6->sin6_scope_id = netdev->scope_id;
 	}
 
 	/* Copy IPv6 address portion to socket address */
@@ -1212,50 +1213,33 @@ static struct settings_operations ipv6_settings_operations = {
 	.fetch = ipv6_fetch,
 };
 
-/** IPv6 link-local address settings */
-struct ipv6_settings {
-	/** Reference counter */
-	struct refcnt refcnt;
-	/** Settings interface */
-	struct settings settings;
-};
-
 /**
  * Register IPv6 link-local address settings
  *
  * @v netdev		Network device
+ * @v priv		Private data
  * @ret rc		Return status code
  */
-static int ipv6_register_settings ( struct net_device *netdev ) {
+static int ipv6_register_settings ( struct net_device *netdev, void *priv ) {
 	struct settings *parent = netdev_settings ( netdev );
-	struct ipv6_settings *ipv6set;
+	struct settings *settings = priv;
 	int rc;
 
-	/* Allocate and initialise structure */
-	ipv6set = zalloc ( sizeof ( *ipv6set ) );
-	if ( ! ipv6set ) {
-		rc = -ENOMEM;
-		goto err_alloc;
-	}
-	ref_init ( &ipv6set->refcnt, NULL );
-	settings_init ( &ipv6set->settings, &ipv6_settings_operations,
-			&ipv6set->refcnt, &ipv6_settings_scope );
-	ipv6set->settings.order = IPV6_ORDER_LINK_LOCAL;
-
-	/* Register settings */
-	if ( ( rc = register_settings ( &ipv6set->settings, parent,
+	/* Initialise and register settings */
+	settings_init ( settings, &ipv6_settings_operations,
+			&netdev->refcnt, &ipv6_settings_scope );
+	settings->order = IPV6_ORDER_LINK_LOCAL;
+	if ( ( rc = register_settings ( settings, parent,
 					IPV6_SETTINGS_NAME ) ) != 0 )
-		goto err_register;
+		return rc;
 
- err_register:
-	ref_put ( &ipv6set->refcnt );
- err_alloc:
-	return rc;
+	return 0;
 }
 
 /** IPv6 network device driver */
 struct net_driver ipv6_driver __net_driver = {
 	.name = "IPv6",
+	.priv_len = sizeof ( struct settings ),
 	.probe = ipv6_register_settings,
 };
 

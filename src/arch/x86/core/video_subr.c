@@ -51,6 +51,7 @@ static void video_init(void)
 
 		inited=1;
 	}
+	vga_console.disabled &= ~CONSOLE_DISABLED_OUTPUT;
 }
 
 static void video_scroll(void)
@@ -109,5 +110,6 @@ struct console_driver vga_console __console_driver = {
 };
 
 struct init_fn video_init_fn __init_fn ( INIT_EARLY ) = {
+	.name = "video",
 	.initialise = video_init,
 };

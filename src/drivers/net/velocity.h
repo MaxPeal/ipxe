@@ -36,7 +36,7 @@ struct velocity_rx_descriptor {
 } __attribute__ ((packed));
 
 #define	VELOCITY_DES0_RMBC(_n)	(((_n) >> 16) & 0x1fff)
-#define	VELOCITY_DES0_OWN	(1 << 31)
+#define	VELOCITY_DES0_OWN	(1U << 31)
 #define	VELOCITY_DES0_TERR	(1 << 15)
 #define	VELOCITY_DES0_RXOK	(1 << 15)
 #define	VELOCITY_DES0_FDX	(1 << 14)
@@ -74,7 +74,7 @@ struct velocity_rx_descriptor {
 #define	VELOCITY_DES1_JMBO	(1 << 17)
 #define	VELOCITY_DES1_CRC	(1 << 16)
 
-#define	VELOCITY_DES2_IC	(1 << 31)
+#define	VELOCITY_DES2_IC	(1U << 31)
 #define	VELOCITY_DES2_SIZE(_n)	(((_n) & 0x1fff) << 16)
 
 /** Number of receive descriptors
@@ -326,7 +326,9 @@ struct velocity_nic {
 	/** Registers */
 	void *regs;
 	/** MII interface */
-	struct mii_interface mii;
+	struct mii_interface mdio;
+	/** MII device */
+	struct mii_device mii;
 	/** Netdev */
 	struct net_device *netdev;
 

@@ -8,10 +8,11 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( FORBIDDEN );
 
 #include <stdint.h>
 #include <ipxe/tables.h>
-#include <gdbmach.h>
+#include <bits/gdbmach.h>
 
 /**
  * A transport mechanism for the GDB protocol

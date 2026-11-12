@@ -209,14 +209,15 @@ static u8 SF_mode;		/* Special Function: 1:VLAN, 2:RX Flow Control
 /**********************************************
 * Descriptor Ring and Buffer defination
 ***********************************************/
-struct {
+struct dmfe_bss {
 	struct tx_desc txd[TX_DESC_CNT] __attribute__ ((aligned(32)));
 	unsigned char txb[TX_BUF_ALLOC * TX_DESC_CNT]
 	__attribute__ ((aligned(32)));
 	struct rx_desc rxd[RX_DESC_CNT] __attribute__ ((aligned(32)));
 	unsigned char rxb[RX_ALLOC_SIZE * RX_DESC_CNT]
 	__attribute__ ((aligned(32)));
-} dmfe_bufs __shared;
+};
+#define dmfe_bufs NIC_FAKE_BSS ( struct dmfe_bss )
 #define txd dmfe_bufs.txd
 #define txb dmfe_bufs.txb
 #define rxd dmfe_bufs.rxd
@@ -435,7 +436,7 @@ static void dmfe_transmit(struct nic *nic,
 /**************************************************************************
 DISABLE - Turn off ethernet interface
 ***************************************************************************/
-static void dmfe_disable ( struct nic *nic __unused ) {
+static void dmfe_disable ( struct nic *nic __unused, void *hwdev __unused ) {
 	/* Reset & stop DM910X board */
 	outl(DM910X_RESET, BASE + DCR0);
 	udelay(5);
@@ -1208,16 +1209,16 @@ static struct nic_operations dmfe_operations = {
 };
 
 static struct pci_device_id dmfe_nics[] = {
+	PCI_ROM(0x1282, 0x9009, "dmfe9009", "Davicom 9009", 0),
 	PCI_ROM(0x1282, 0x9100, "dmfe9100", "Davicom 9100", 0),
 	PCI_ROM(0x1282, 0x9102, "dmfe9102", "Davicom 9102", 0),
-	PCI_ROM(0x1282, 0x9009, "dmfe9009", "Davicom 9009", 0),
 	PCI_ROM(0x1282, 0x9132, "dmfe9132", "Davicom 9132", 0),	/* Needs probably some fixing */
 };
 
 PCI_DRIVER ( dmfe_driver, dmfe_nics, PCI_NO_CLASS );
 
 DRIVER ( "DMFE/PCI", nic_driver, pci_driver, dmfe_driver,
-	 dmfe_probe, dmfe_disable );
+	 dmfe_probe, dmfe_disable, dmfe_bufs );
 
 /*
  * Local variables:

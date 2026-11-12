@@ -16,11 +16,20 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 /* CR0: protection enabled */
 #define CR0_PE ( 1 << 0 )
 
+/* CR0: FPU emulation enabled */
+#define CR0_EM ( 1 << 2 )
+
+/* CR0: task switched */
+#define CR0_TS ( 1 << 3 )
+
 /* CR0: paging */
 #define CR0_PG ( 1 << 31 )
 
 /* CR4: physical address extensions */
 #define CR4_PAE ( 1 << 5 )
+
+/* CR4: OS support for FXSAVE/FXRSTOR across transitions */
+#define CR4_OSFXSR ( 1 << 9 )
 
 /* Extended feature enable MSR (EFER) */
 #define MSR_EFER 0xc0000080
@@ -83,6 +92,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 #define if64 if 0
 #endif
 
+	.section ".note.GNU-stack"
+
 /****************************************************************************
  * Global descriptor table
  *
@@ -99,7 +110,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
  ****************************************************************************
  */
 	.section ".data16.gdt", "aw", @progbits
-	.align 16
+	.balign 16
 gdt:
 gdtr:		/* The first GDT entry is unused, the GDTR can fit here. */
 gdt_limit:		.word gdt_length - 1
@@ -202,17 +213,13 @@ pm_esp:	.long VIRTUAL(_estack)
  */
 	/* Temporary static buffer usage by virt_call */
 	.struct	0
-VC_TMP_GDT:		.space	6
-VC_TMP_IDT:		.space	6
-VC_TMP_PAD:		.space	4 /* for alignment */
-.if64
+VC_TMP_GDTR_IDTR:	.space	12 /* must match rm_default_gdtr_idtr layout */
+VC_TMP_CR0:		.space	4
 VC_TMP_CR3:		.space	4
 VC_TMP_CR4:		.space	4
 VC_TMP_EMER:		.space	8
-.endif
-#ifdef TIVOLI_VMM_WORKAROUND
+	.balign 16
 VC_TMP_FXSAVE:		.space	512
-#endif
 VC_TMP_END:
 	.previous
 
@@ -224,7 +231,7 @@ RC_TMP_END:
 
 	/* Shared temporary static buffer */
 	.section ".bss16.rm_tmpbuf", "aw", @nobits
-	.align 16
+	.balign 16
 rm_tmpbuf:
 	.space	VC_TMP_END
 	.size	rm_tmpbuf, . - rm_tmpbuf
@@ -350,6 +357,11 @@ init_librm_rmode:
 	/* Initialise IDT */
 	virtcall init_idt
 
+.if32 ; /* Check for FXSAVE/FXRSTOR (always supported by 64-bit CPUs) */
+	clc
+	virtcall check_fxsr
+	setnc	fxsr_supported
+.endif
 	/* Restore registers */
 	popl	%edi
 	popl	%ebx
@@ -365,6 +377,12 @@ set_seg_base:
 	movb	%ah, 7(%bx)
 	roll	$16, %eax
 	ret
+
+.if32	/* FXSAVE/FXRSTOR instructions supported flag */
+	.section ".data16.fxsr_supported", "awx", @progbits
+fxsr_supported:
+	.byte	0
+.endif
 
 /****************************************************************************
  * real_to_prot (real-mode near call, 32-bit virtual return address)
@@ -417,6 +435,37 @@ real_to_prot:
 	/* Load protected-mode global descriptor table */
 	data32 lgdt gdtr
 
+	/* Enable SSE instruction execution, if supported.
+	 *
+	 * Note that we have to assert CR4.OSFXSR to allow these
+	 * instructions to execute, but our context switching logic
+	 * (e.g. the protected-mode and long-mode interrupt handlers)
+	 * does not actually preserve the FPU/MMX/SSE registers.
+	 *
+	 * Our C code therefore cannot in general presume that the
+	 * FPU/MMX/SSE registers will be preserved across arbitrary
+	 * context boundaries.  However, since C code executes with
+	 * interrupts disabled, an individual function may safely use
+	 * temporary FPU/MMX/SSE registers provided that it does not
+	 * enable interrupts or otherwise relinquish the context.
+	 *
+	 * For the same C code to also be usable under the UEFI IA-32
+	 * ABI, it must preserve all registers other than %eax, %ecx,
+	 * and %edx, including preserving all MMX and XMM registers.
+	 *
+	 * The practical upshot is therefore that C code may use SSE
+	 * instructions and may assume that SSE registers will not be
+	 * changed arbitrarily during execution (either because the
+	 * ABI guarantees preservation, as with UEFI or Linux, or
+	 * because the runtime environment guarantees that interrupts
+	 * are disabled), but the C code must itself restore the
+	 * values of any modified FPU/MMX/SSE registers.
+	 */
+.if32 ; testb	$0xff, fxsr_supported ; jz 1f ; .endif
+	movl	%cr4, %eax
+	orw	$CR4_OSFXSR, %ax
+	movl	%eax, %cr4
+1:
 	/* Zero segment registers.  This wastes around 12 cycles on
 	 * real hardware, but saves a substantial number of emulated
 	 * instructions under KVM.
@@ -428,10 +477,10 @@ real_to_prot:
 	movw	%ax, %gs
 	movw	%ax, %ss
 
-	/* Switch to protected mode (with paging disabled if applicable) */
+	/* Switch to protected mode with paging disabled */
 	cli
 	movl	%cr0, %eax
-.if64 ;	andl	$~CR0_PG, %eax ; .endif
+	andl	$~( CR0_PG | CR0_TS | CR0_EM ), %eax
 	orb	$CR0_PE, %al
 	movl	%eax, %cr0
 	data32 ljmp	$VIRTUAL_CS, $VIRTUAL(r2p_pmode)
@@ -1007,21 +1056,25 @@ virt_call:
 	cli
 	movw	%cs:rm_ds, %ds
 
-#ifdef TIVOLI_VMM_WORKAROUND
-	/* Preserve FPU, MMX and SSE state in temporary static buffer */
+	/* Preserve FPU/MMX/SSE state and CR4 in temporary static buffer */
+.if32 ; testb	$0xff, fxsr_supported ; jz 1f ; .endif
 	fxsave	( rm_tmpbuf + VC_TMP_FXSAVE )
-#endif
-	/* Preserve GDT and IDT in temporary static buffer */
-	sidt	( rm_tmpbuf + VC_TMP_IDT )
-	sgdt	( rm_tmpbuf + VC_TMP_GDT )
+	movl	%cr4, %eax
+	movl	%eax, ( rm_tmpbuf + VC_TMP_CR4 )
+1:
+	/* Preserve CR0 in temporary static buffer */
+	movl	%cr0, %eax
+	movl	%eax, ( rm_tmpbuf + VC_TMP_CR0 )
 
-.if64 ;	/* Preserve control registers, if applicable */
+	/* Preserve GDTR and IDTR in temporary static buffer */
+	sidt	( rm_tmpbuf + VC_TMP_GDTR_IDTR + 6 )
+	sgdt	( rm_tmpbuf + VC_TMP_GDTR_IDTR + 0 )
+
+.if64 ;	/* Preserve control registers used for long mode, if applicable */
 	movl	$MSR_EFER, %ecx
 	rdmsr
 	movl	%eax, ( rm_tmpbuf + VC_TMP_EMER + 0 )
 	movl	%edx, ( rm_tmpbuf + VC_TMP_EMER + 4 )
-	movl	%cr4, %eax
-	movl	%eax, ( rm_tmpbuf + VC_TMP_CR4 )
 	movl	%cr3, %eax
 	movl	%eax, ( rm_tmpbuf + VC_TMP_CR3 )
 .endif
@@ -1059,28 +1112,31 @@ vc_lmode:
 	/* Switch to real mode and move register dump back to RM stack */
 	movl	$VC_OFFSET_END, %ecx
 	movl	$VC_TMP_END, %edx
-	leal	VC_TMP_GDT(%esp, %ecx), %esi
+	leal	VC_TMP_GDTR_IDTR(%esp, %ecx), %esi
 	pushl	$vc_rmode
 	jmp	prot_to_real
 	.section ".text16.virt_call", "ax", @progbits
 	.code16
 vc_rmode:
-.if64 ;	/* Restore control registers, if applicable */
+.if64 ;	/* Restore control registers used for long mode, if applicable */
 	movw	%sp, %bp
 	movl	( rm_tmpbuf + VC_TMP_CR3 ), %eax
 	movl	%eax, %cr3
-	movl	( rm_tmpbuf + VC_TMP_CR4 ), %eax
-	movl	%eax, %cr4
 	movl	( rm_tmpbuf + VC_TMP_EMER + 0 ), %eax
 	movl	( rm_tmpbuf + VC_TMP_EMER + 4 ), %edx
 	movl	$MSR_EFER, %ecx
 	wrmsr
 .endif
+	/* Restore CR0 from temporary static buffer */
+	movl	( rm_tmpbuf + VC_TMP_CR0 ), %eax
+	movl	%eax, %cr0
 
-#ifdef TIVOLI_VMM_WORKAROUND
-	/* Restore FPU, MMX and SSE state from temporary static buffer */
+	/* Restore FPU/MMX/SSE state and CR4 from temporary static buffer */
+.if32 ; testb	$0xff, fxsr_supported ; jz 1f ; .endif
+	movl	( rm_tmpbuf + VC_TMP_CR4 ), %eax
+	movl	%eax, %cr4
 	fxrstor	( rm_tmpbuf + VC_TMP_FXSAVE )
-#endif
+1:
 	/* Restore registers and flags and return */
 	popl	%eax /* skip %cs and %ss */
 	popw	%ds
@@ -1090,9 +1146,25 @@ vc_rmode:
 	popal
 	/* popal skips %esp.  We therefore want to do "movl -20(%sp),
 	 * %esp", but -20(%sp) is not a valid 80386 expression.
-	 * Fortunately, prot_to_real() zeroes the high word of %esp, so
-	 * we can just use -20(%esp) instead.
+	 *
+	 * In theory, the high word of %esp is already zero at this
+	 * point (since prot_to_real() should set it to zero), and the
+	 * popal instruction does not load %esp from the saved
+	 * register dump.  This would allow us to just use -20(%esp)
+	 * instead.
+	 *
+	 * However, some 386 chips are observed to have an
+	 * undocumented errata that causes the popal instruction to
+	 * load the high 16 bits of %esp.  We therefore explicitly
+	 * zero-extend %sp to %esp to work around this errata.
+	 *
+	 * Inserting this instruction also happens to work around
+	 * another (known and documented) errata in the 386, in which
+	 * the CPU may malfunction if popal is followed immediately by
+	 * an instruction that uses a base address register to form an
+	 * effective address.
 	 */
+	movzwl	%sp, %esp
 	addr32 movl -20(%esp), %esp
 	popfl
 	popw	%ss /* padding */
@@ -1363,20 +1435,19 @@ flatten_dummy:
 	.code32
 	.globl interrupt_wrapper
 interrupt_wrapper:
-	/* Preserve registers (excluding already-saved %eax and
-	 * otherwise unused registers which are callee-save for both
-	 * 32-bit and 64-bit ABIs).
-	 */
+	/* Preserve registers (excluding already-saved %eax) */
 	pushl	%ebx
 	pushl	%ecx
 	pushl	%edx
 	pushl	%esi
 	pushl	%edi
+	pushl	%ebp
 
 	/* Expand IRQ number to whole %eax register */
 	movzbl	%al, %eax
 
 .if64 ; /* Skip transition to long mode, if applicable */
+	xorl	%edx, %edx
 	movw	%cs, %bx
 	cmpw	$LONG_CS, %bx
 	je	1f
@@ -1391,24 +1462,45 @@ interrupt_wrapper:
 
 	/* Switch to virtual addressing */
 	call	intr_to_prot
+
+	/* Pass 32-bit interrupt frame pointer in %edx */
+	movl	%esp, %edx
+	xorl	%ecx, %ecx
 .if64
 	/* Switch to long mode */
 	call	prot_to_long
 	.code64
 
-1:	/* Preserve long-mode caller-save registers */
+1:	/* Preserve long-mode registers */
 	pushq	%r8
 	pushq	%r9
 	pushq	%r10
 	pushq	%r11
+	pushq	%r12
+	pushq	%r13
+	pushq	%r14
+	pushq	%r15
 
 	/* Expand IRQ number to whole %rdi register */
 	movl	%eax, %edi
+
+	/* Pass 32-bit interrupt frame pointer (if applicable) in %rsi */
+	testl	%edx, %edx
+	je	1f
+	movl	%edx, %esi
+	addl	virt_offset, %esi
+1:
+	/* Pass 64-bit interrupt frame pointer in %rdx */
+	movq	%rsp, %rdx
 .endif
 	/* Call interrupt handler */
 	call	interrupt
 .if64
-	/* Restore long-mode caller-save registers */
+	/* Restore long-mode registers */
+	popq	%r15
+	popq	%r14
+	popq	%r13
+	popq	%r12
 	popq	%r11
 	popq	%r10
 	popq	%r9
@@ -1432,6 +1524,7 @@ interrupt_wrapper:
 	popl	%ds
 
 1:	/* Restore registers */
+	popl	%ebp
 	popl	%edi
 	popl	%esi
 	popl	%edx
@@ -1449,7 +1542,7 @@ interrupt_wrapper:
  ****************************************************************************
  */
 	.section ".pages", "aw", @nobits
-	.align	SIZEOF_PT
+	.balign	SIZEOF_PT
 
 	/* Page map level 4 entries (PML4Es)
 	 *
@@ -1598,3 +1691,70 @@ init_pages:
 
 	/* Return */
 	ret
+
+/****************************************************************************
+ * sipi (real-mode jump)
+ *
+ * Handle Startup IPI
+ *
+ * This code must be copied to a page-aligned boundary in base memory.
+ * It will be entered with %cs:0000 pointing to the start of the code.
+ * The stack pointer is undefined and so no stack space can be used.
+ *
+ ****************************************************************************
+ */
+	.section ".text16.sipi", "ax", @progbits
+	.code16
+	.globl	sipi
+sipi:
+	/* Retrieve rm_ds from copy */
+	movw	%cs:( sipi_ds - sipi ), %ax
+	movw	%ax, %ds
+
+	/* Load GDT and switch to protected mode */
+	data32 lgdt gdtr
+	movl	%cr0, %eax
+	orb	$CR0_PE, %al
+	movl	%eax, %cr0
+	data32 ljmp $VIRTUAL_CS, $VIRTUAL(1f)
+
+	/* Copy of rm_ds required to access GDT */
+	.globl	sipi_ds
+sipi_ds:
+	.word	0
+
+	/* Length of real-mode SIPI handler to be copied */
+	.globl	sipi_len
+	.equ	sipi_len, . - sipi
+
+	.section ".text.sipi", "ax", @progbits
+	.code32
+1:	/* Set up protected-mode segment registers (with no stack) */
+	movw	$VIRTUAL_DS, %ax
+	movw	%ax, %ds
+	movw	%ax, %ss
+	movw	$PHYSICAL_DS, %ax
+	movw	%ax, %es
+	movw	%ax, %fs
+	movw	%ax, %gs
+
+	/* Load register state and clear stack pointer */
+	movl	$VIRTUAL(sipi_regs), %esp
+	popal
+
+	/* Switch to flat physical addressing */
+	movw	$PHYSICAL_DS, %sp
+	movw	%sp, %ds
+	movw	%sp, %ss
+
+	/* Clear stack pointer */
+	xorl	%esp, %esp
+
+	/* Jump to protected-mode SIPI handler */
+	ljmp	%cs:*VIRTUAL(sipi_handler)
+
+	/* Protected-mode SIPI handler vector */
+	.section ".data.sipi_handler", "aw", @progbits
+	.globl	sipi_handler
+sipi_handler:
+	.long	0, PHYSICAL_CS

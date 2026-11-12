@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <byteswap.h>
 #include <ipxe/list.h>
@@ -53,6 +54,20 @@ enum usb_speed {
 	/** Super speed (5Gbps) */
 	USB_SPEED_SUPER = USB_SPEED ( 5, 3 ),
 };
+
+/** Define a USB bus:device address
+ *
+ * @v bus		Bus address
+ * @v dev		Device address
+ * @ret busdev		Bus:device address
+ */
+#define USB_BUSDEV( bus, dev ) ( ( (bus) << 8 ) | (dev) )
+
+/** Extract USB bus address */
+#define USB_BUS( busdev ) ( (busdev) >> 8 )
+
+/** Extract USB device address */
+#define USB_DEV( busdev ) ( (busdev) & 0xff )
 
 /** USB packet IDs */
 enum usb_pid {
@@ -368,22 +383,32 @@ usb_is_within_config ( struct usb_configuration_descriptor *config,
 }
 
 /** Iterate over all configuration descriptors */
-#define for_each_config_descriptor( desc, config )			   \
+#define for_each_config_descriptor( desc, config, typeval )		   \
 	for ( desc = container_of ( &(config)->header,			   \
 				    typeof ( *desc ), header ) ;	   \
-	      usb_is_within_config ( (config), &desc->header ) ;	   \
+	      ( usb_is_within_config ( (config), &desc->header ) &&	   \
+		( desc->header.len >= sizeof ( desc->header ) ) ) ;	   \
 	      desc = container_of ( usb_next_descriptor ( &desc->header ), \
-				    typeof ( *desc ), header ) )
+				    typeof ( *desc ), header ) )	   \
+		if ( ( desc->header.len < sizeof ( *desc ) ) ||		   \
+		     ( desc->header.type != (typeval) ) )		   \
+			continue;					   \
+		else
 
 /** Iterate over all configuration descriptors within an interface descriptor */
-#define for_each_interface_descriptor( desc, config, interface )	   \
+#define for_each_interface_descriptor( desc, config, interface, typeval )  \
 	for ( desc = container_of ( usb_next_descriptor ( &(interface)->   \
 							  header ),	   \
 				    typeof ( *desc ), header ) ;	   \
 	      ( usb_is_within_config ( (config), &desc->header ) &&	   \
+		( desc->header.len >= sizeof ( desc->header ) ) &&	   \
 		( desc->header.type != USB_INTERFACE_DESCRIPTOR ) ) ;	   \
 	      desc = container_of ( usb_next_descriptor ( &desc->header ), \
-				    typeof ( *desc ), header ) )
+				    typeof ( *desc ), header ) )	   \
+		if ( ( desc->header.len < sizeof ( *desc ) ) ||		   \
+		     ( desc->header.type != (typeval) ) )		   \
+			continue;					   \
+		else
 
 /** A USB endpoint */
 struct usb_endpoint {
@@ -580,6 +605,7 @@ usb_endpoint_described ( struct usb_endpoint *ep,
 			 struct usb_interface_descriptor *interface,
 			 unsigned int type, unsigned int index );
 extern int usb_endpoint_open ( struct usb_endpoint *ep );
+extern int usb_endpoint_clear_halt ( struct usb_endpoint *ep );
 extern void usb_endpoint_close ( struct usb_endpoint *ep );
 extern int usb_message ( struct usb_endpoint *ep, unsigned int request,
 			 unsigned int value, unsigned int index,
@@ -620,6 +646,7 @@ usb_recycle ( struct usb_endpoint *ep, struct io_buffer *iobuf ) {
 }
 
 extern int usb_prefill ( struct usb_endpoint *ep );
+extern int usb_refill_limit ( struct usb_endpoint *ep, unsigned int max );
 extern int usb_refill ( struct usb_endpoint *ep );
 extern void usb_flush ( struct usb_endpoint *ep );
 
@@ -954,6 +981,12 @@ struct usb_bus {
 	/** Host controller operations set */
 	struct usb_host_operations *op;
 
+	/** Bus address
+	 *
+	 * This is an internal index used only to allow a USB device
+	 * to be identified via a nominal bus:device address.
+	 */
+	unsigned int address;
 	/** Largest transfer allowed on the bus */
 	size_t mtu;
 	/** Address in-use mask
@@ -1237,6 +1270,23 @@ usb_set_interface ( struct usb_device *usb, unsigned int interface,
 			     NULL, 0 );
 }
 
+/**
+ * Get USB depth
+ *
+ * @v usb		USB device
+ * @ret depth		Hub depth
+ */
+static inline unsigned int usb_depth ( struct usb_device *usb ) {
+	struct usb_device *parent;
+	unsigned int depth;
+
+	/* Navigate up to root hub, constructing depth as we go */
+	for ( depth = 0 ; ( parent = usb->port->hub->usb ) ; usb = parent )
+		depth++;
+
+	return depth;
+}
+
 extern struct list_head usb_buses;
 
 extern struct usb_interface_descriptor *
@@ -1249,6 +1299,9 @@ usb_endpoint_descriptor ( struct usb_configuration_descriptor *config,
 extern struct usb_endpoint_companion_descriptor *
 usb_endpoint_companion_descriptor ( struct usb_configuration_descriptor *config,
 				    struct usb_endpoint_descriptor *desc );
+
+extern struct usb_device * find_usb ( struct usb_bus *bus,
+				      unsigned int address );
 
 extern struct usb_hub * alloc_usb_hub ( struct usb_bus *bus,
 					struct usb_device *usb,
@@ -1266,13 +1319,14 @@ extern struct usb_bus * alloc_usb_bus ( struct device *dev,
 extern int register_usb_bus ( struct usb_bus *bus );
 extern void unregister_usb_bus ( struct usb_bus *bus );
 extern void free_usb_bus ( struct usb_bus *bus );
+extern struct usb_bus * find_usb_bus ( unsigned int address );
 extern struct usb_bus * find_usb_bus_by_location ( unsigned int bus_type,
 						   unsigned int location );
 
 extern int usb_alloc_address ( struct usb_bus *bus );
 extern void usb_free_address ( struct usb_bus *bus, unsigned int address );
+extern int usb_find_next ( struct usb_device **usb, uint16_t *busdev );
 extern unsigned int usb_route_string ( struct usb_device *usb );
-extern unsigned int usb_depth ( struct usb_device *usb );
 extern struct usb_port * usb_root_hub_port ( struct usb_device *usb );
 extern struct usb_port * usb_transaction_translator ( struct usb_device *usb );
 
@@ -1324,6 +1378,18 @@ struct usb_device_id {
 	/** Arbitrary driver data */
 	unsigned long driver_data;
 };
+
+/* Define a USB device ID */
+#define USB_ID( _vendor, _product, _name, _description, _data ) {	\
+	.vendor = _vendor,						\
+	.product = _product,						\
+	.name = _name,							\
+	.driver_data = _data						\
+}
+
+/* Define a USB device ID with a corresponding build rule */
+#define USB_ROM( _vendor, _product, _name, _description, _data )	\
+	USB_ID ( _vendor, _product, _name, _description, _data )
 
 /** Match-anything ID */
 #define USB_ANY_ID 0xffff
@@ -1395,6 +1461,9 @@ struct usb_driver {
 
 /** Declare a USB driver */
 #define __usb_driver __table_entry ( USB_DRIVERS, 01 )
+
+/** Declare a USB fallback driver */
+#define __usb_fallback_driver __table_entry ( USB_DRIVERS, 02 )
 
 /** USB driver scores */
 enum usb_driver_score {

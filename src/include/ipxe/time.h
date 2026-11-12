@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <sys/time.h>
 #include <ipxe/api.h>
@@ -68,6 +69,15 @@ static inline __attribute__ (( always_inline )) void
 time_adjust ( signed long delta ) {
 
 	time_offset += delta;
+}
+
+/**
+ * Clear system clock adjustment
+ *
+ */
+static inline __attribute__ (( always_inline )) void time_restore ( void ) {
+
+	time_offset = 0;
 }
 
 #endif /* _IPXE_TIME_H */

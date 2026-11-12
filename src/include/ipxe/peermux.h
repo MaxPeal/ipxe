@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/list.h>
@@ -41,16 +42,6 @@ struct peerdist_multiplexed_block {
 	struct interface xfer;
 };
 
-/** PeerDist statistics */
-struct peerdist_statistics {
-	/** Maximum observed number of peers */
-	unsigned int peers;
-	/** Number of blocks downloaded in total */
-	unsigned int total;
-	/** Number of blocks downloaded from peers */
-	unsigned int local;
-};
-
 /** A PeerDist download multiplexer */
 struct peerdist_multiplexer {
 	/** Reference count */
@@ -75,9 +66,6 @@ struct peerdist_multiplexer {
 	struct list_head idle;
 	/** Block downloads */
 	struct peerdist_multiplexed_block block[PEERMUX_MAX_BLOCKS];
-
-	/** Statistics */
-	struct peerdist_statistics stats;
 };
 
 extern int peermux_filter ( struct interface *xfer, struct interface *info,

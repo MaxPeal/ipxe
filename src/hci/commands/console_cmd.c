@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
@@ -96,7 +97,7 @@ static int console_exec ( int argc, char **argv ) {
 	if ( opts.picture ) {
 
 		/* Acquire image */
-		if ( ( rc = imgacquire ( opts.picture, 0, &image ) ) != 0 )
+		if ( ( rc = imgacquire ( opts.picture, 0, 0, &image ) ) != 0 )
 			goto err_acquire;
 
 		/* Convert to pixel buffer */
@@ -251,17 +252,6 @@ static int cpair_exec ( int argc, char **argv ) {
 }
 
 /** Console management commands */
-struct command console_commands[] __command = {
-	{
-		.name = "console",
-		.exec = console_exec,
-	},
-	{
-		.name = "colour",
-		.exec = colour_exec,
-	},
-	{
-		.name = "cpair",
-		.exec = cpair_exec,
-	},
-};
+COMMAND ( console, console_exec );
+COMMAND ( colour, colour_exec );
+COMMAND ( cpair, cpair_exec );

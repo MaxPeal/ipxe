@@ -8,32 +8,48 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
+
+/** Minimum TLS version */
+#define TLS_VERSION_MIN TLS_VERSION_TLS_1_1
+
+/** Maximum TLS version */
+#define TLS_VERSION_MAX TLS_VERSION_TLS_1_3
+
+/** Public-key exchange algorithm */
+#define CRYPTO_EXCHANGE_PUBKEY
+
+/** DHE key exchange algorithm */
+#define CRYPTO_EXCHANGE_DHE
+
+/** ECDHE key exchange algorithm */
+#define CRYPTO_EXCHANGE_ECDHE
 
 /** RSA public-key algorithm */
 #define CRYPTO_PUBKEY_RSA
 
+/** ECDSA public-key algorithm */
+#define CRYPTO_PUBKEY_ECDSA
+
 /** AES-CBC block cipher */
 #define CRYPTO_CIPHER_AES_CBC
 
-/** MD5 digest algorithm
- *
- * Note that use of MD5 is implicit when using TLSv1.1 or earlier.
- */
-#define CRYPTO_DIGEST_MD5
+/** AES-GCM block cipher */
+#define CRYPTO_CIPHER_AES_GCM
 
-/** SHA-1 digest algorithm
- *
- * Note that use of SHA-1 is implicit when using TLSv1.1 or earlier.
- */
+/** MD4 digest algorithm */
+//#define CRYPTO_DIGEST_MD4
+
+/** MD5 digest algorithm */
+//#define CRYPTO_DIGEST_MD5
+
+/** SHA-1 digest algorithm */
 #define CRYPTO_DIGEST_SHA1
 
 /** SHA-224 digest algorithm */
 #define CRYPTO_DIGEST_SHA224
 
-/** SHA-256 digest algorithm
- *
- * Note that use of SHA-256 is implicit when using TLSv1.2.
- */
+/** SHA-256 digest algorithm */
 #define CRYPTO_DIGEST_SHA256
 
 /** SHA-384 digest algorithm */
@@ -41,6 +57,39 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 /** SHA-512 digest algorithm */
 #define CRYPTO_DIGEST_SHA512
+
+/** SHA-512/224 digest algorithm */
+//#define CRYPTO_DIGEST_SHA512_224
+
+/** SHA-512/256 digest algorithm */
+//#define CRYPTO_DIGEST_SHA512_256
+
+/** X25519 elliptic curve */
+#define CRYPTO_CURVE_X25519
+
+/** P-256 elliptic curve */
+#define CRYPTO_CURVE_P256
+
+/** P-384 elliptic curve */
+#define CRYPTO_CURVE_P384
+
+/** FFDHE2048 finite field */
+#define CRYPTO_GROUP_FFDHE2048
+
+/** FFDHE3072 finite field */
+#define CRYPTO_GROUP_FFDHE3072
+
+/** FFDHE4096 finite field */
+#define CRYPTO_GROUP_FFDHE4096
+
+/** MODP2048 finite field */
+#define CRYPTO_GROUP_MODP2048
+
+/** MODP3072 finite field */
+#define CRYPTO_GROUP_MODP3072
+
+/** MODP4096 finite field */
+#define CRYPTO_GROUP_MODP4096
 
 /** Margin of error (in seconds) allowed in signed timestamps
  *
@@ -57,6 +106,14 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  * certificate chain.
  */
 #define CROSSCERT "http://ca.ipxe.org/auto"
+
+/** Perform OCSP checks when applicable
+ *
+ * Some CAs provide non-functional OCSP servers, and some clients are
+ * forced to operate on networks without access to the OCSP servers.
+ * Allow the user to explicitly disable the use of OCSP checks.
+ */
+#define OCSP_CHECK
 
 #include <config/named.h>
 #include NAMED_CONFIG(crypto.h)

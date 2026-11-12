@@ -9,6 +9,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/fc.h>
@@ -162,5 +163,13 @@ struct fcp_prli_service_parameters {
 
 /** Enhanced discovery supported */
 #define FCP_PRLI_ENH_DISC 0x0800
+
+/** An FCP device description */
+struct fcp_description {
+	/** Fibre Channel WWN */
+	struct fc_name wwn;
+	/** SCSI LUN */
+	struct scsi_lun lun;
+};
 
 #endif /* _IPXE_FCP_H */

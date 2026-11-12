@@ -2,6 +2,7 @@
 #define BYTESWAP_H
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <endian.h>
@@ -82,9 +83,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define bswap_64( value ) __bswap_64 (value)
 
 #if __BYTE_ORDER == __LITTLE_ENDIAN
-#define __cpu_to_leNN( bits, value ) (value)
+#define __cpu_to_leNN( bits, value ) ( ( uint ## bits ## _t ) (value) )
 #define __cpu_to_beNN( bits, value ) __bswap_ ## bits (value)
-#define __leNN_to_cpu( bits, value ) (value)
+#define __leNN_to_cpu( bits, value ) ( ( uint ## bits ## _t ) (value) )
 #define __beNN_to_cpu( bits, value ) __bswap_ ## bits (value)
 #define __cpu_to_leNNs( bits, ptr ) do { } while ( 0 )
 #define __cpu_to_beNNs( bits, ptr ) __bswap_ ## bits ## s (ptr)
@@ -94,9 +95,9 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #if __BYTE_ORDER == __BIG_ENDIAN
 #define __cpu_to_leNN( bits, value ) __bswap_ ## bits (value)
-#define __cpu_to_beNN( bits, value ) (value)
+#define __cpu_to_beNN( bits, value ) ( ( uint ## bits ## _t ) (value) )
 #define __leNN_to_cpu( bits, value ) __bswap_ ## bits (value)
-#define __beNN_to_cpu( bits, value ) (value)
+#define __beNN_to_cpu( bits, value ) ( ( uint ## bits ## _t ) (value) )
 #define __cpu_to_leNNs( bits, ptr ) __bswap_ ## bits ## s (ptr)
 #define __cpu_to_beNNs( bits, ptr ) do { } while ( 0 )
 #define __leNN_to_cpus( bits, ptr ) __bswap_ ## bits ## s (ptr)

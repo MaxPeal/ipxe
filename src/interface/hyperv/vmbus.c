@@ -195,16 +195,10 @@ static int vmbus_initiate_contact ( struct hv_hypervisor *hv,
 		       vmbus );
 		return -ENOTSUP;
 	}
-	if ( version->version.raw != cpu_to_le32 ( raw ) ) {
-		DBGC ( vmbus, "VMBUS %p unexpected version %d.%d\n",
-		       vmbus, le16_to_cpu ( version->version.major ),
-		       le16_to_cpu ( version->version.minor ) );
-		return -EPROTO;
-	}
 
 	DBGC ( vmbus, "VMBUS %p initiated contact using version %d.%d\n",
-	       vmbus, le16_to_cpu ( version->version.major ),
-	       le16_to_cpu ( version->version.minor ) );
+	       vmbus, le16_to_cpu ( initiate.version.major ),
+	       le16_to_cpu ( initiate.version.minor ) );
 	return 0;
 }
 
@@ -279,11 +273,11 @@ static int vmbus_negotiate_version ( struct hv_hypervisor *hv ) {
  * @v len		Length of data buffer
  * @ret gpadl		GPADL ID, or negative error
  */
-int vmbus_establish_gpadl ( struct vmbus_device *vmdev, userptr_t data,
+int vmbus_establish_gpadl ( struct vmbus_device *vmdev, void *data,
 			    size_t len ) {
 	struct hv_hypervisor *hv = vmdev->hv;
 	struct vmbus *vmbus = hv->vmbus;
-	physaddr_t addr = user_to_phys ( data, 0 );
+	physaddr_t addr = virt_to_phys ( data );
 	unsigned int pfn_count = hv_pfn_count ( addr, len );
 	struct {
 		struct vmbus_gpadl_header gpadlhdr;
@@ -440,7 +434,7 @@ int vmbus_open ( struct vmbus_device *vmdev,
 	len = ( sizeof ( *vmdev->out ) + out_len +
 		sizeof ( *vmdev->in ) + in_len );
 	assert ( ( len % PAGE_SIZE ) == 0 );
-	ring = malloc_dma ( len, PAGE_SIZE );
+	ring = malloc_phys ( len, PAGE_SIZE );
 	if ( ! ring ) {
 		rc = -ENOMEM;
 		goto err_alloc_ring;
@@ -448,7 +442,7 @@ int vmbus_open ( struct vmbus_device *vmdev,
 	memset ( ring, 0, len );
 
 	/* Establish GPADL for ring buffer */
-	gpadl = vmbus_establish_gpadl ( vmdev, virt_to_user ( ring ), len );
+	gpadl = vmbus_establish_gpadl ( vmdev, ring, len );
 	if ( gpadl < 0 ) {
 		rc = gpadl;
 		goto err_establish;
@@ -515,7 +509,7 @@ int vmbus_open ( struct vmbus_device *vmdev,
  err_post_message:
 	vmbus_gpadl_teardown ( vmdev, vmdev->gpadl );
  err_establish:
-	free_dma ( ring, len );
+	free_phys ( ring, len );
  err_alloc_ring:
 	free ( packet );
  err_alloc_packet:
@@ -561,7 +555,7 @@ void vmbus_close ( struct vmbus_device *vmdev ) {
 	/* Free ring buffer */
 	len = ( sizeof ( *vmdev->out ) + vmdev->out_len +
 		sizeof ( *vmdev->in ) + vmdev->in_len );
-	free_dma ( vmdev->out, len );
+	free_phys ( vmdev->out, len );
 	vmdev->out = NULL;
 	vmdev->in = NULL;
 
@@ -1008,7 +1002,14 @@ int vmbus_poll ( struct vmbus_device *vmdev ) {
 		       "bytes)\n", vmdev->dev.name, header_len );
 		return -EINVAL;
 	}
-	len = ( ( le16_to_cpu ( header->qlen ) * 8 ) - header_len );
+	len = ( le16_to_cpu ( header->qlen ) * 8 );
+	if ( len < header_len ) {
+		DBGC ( vmdev, "VMBUS %s received underlength packet (%zd "
+		       "bytes with %zd-byte header)\n",
+		       vmdev->dev.name, len, header_len );
+		return -EINVAL;
+	}
+	len -= header_len;
 	footer_len = sizeof ( struct vmbus_packet_footer );
 	ring_len = ( header_len + len + footer_len );
 	if ( ring_len > vmdev->mtu ) {

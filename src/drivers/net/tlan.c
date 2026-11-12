@@ -179,12 +179,13 @@ struct TLanList {
 	} buffer[TLAN_BUFFERS_PER_LIST];
 };
 
-struct {
+struct tlan_bss {
 	struct TLanList tx_ring[TLAN_NUM_TX_LISTS];
 	unsigned char txb[TLAN_MAX_FRAME_SIZE * TLAN_NUM_TX_LISTS];
 	struct TLanList rx_ring[TLAN_NUM_RX_LISTS];
 	unsigned char rxb[TLAN_MAX_FRAME_SIZE * TLAN_NUM_RX_LISTS];
-} tlan_buffers __shared;
+};
+#define tlan_buffers NIC_FAKE_BSS ( struct tlan_bss )
 #define tx_ring tlan_buffers.tx_ring
 #define txb tlan_buffers.txb
 #define rx_ring tlan_buffers.rx_ring
@@ -717,7 +718,7 @@ static void tlan_transmit(struct nic *nic, const char *d,	/* Destination */
 /**************************************************************************
 DISABLE - Turn off ethernet interface
 ***************************************************************************/
-static void tlan_disable ( struct nic *nic __unused ) {
+static void tlan_disable ( struct nic *nic __unused, void *hwdev __unused ) {
 	/* put the card in its initial state */
 	/* This function serves 3 purposes.
 	 * This disables DMA and interrupts so we don't receive
@@ -1697,25 +1698,25 @@ void TLan_PhyMonitor(struct net_device *dev)
 #endif				/* MONITOR */
 
 static struct pci_device_id tlan_nics[] = {
-	PCI_ROM(0x0e11, 0xae34, "netel10", "Compaq Netelligent 10 T PCI UTP", 0),
 	PCI_ROM(0x0e11, 0xae32, "netel100","Compaq Netelligent 10/100 TX PCI UTP", 0),
+	PCI_ROM(0x0e11, 0xae34, "netel10", "Compaq Netelligent 10 T PCI UTP", 0),
 	PCI_ROM(0x0e11, 0xae35, "netflex3i", "Compaq Integrated NetFlex-3/P", 0),
+	PCI_ROM(0x0e11, 0xae40, "netel100d", "Compaq Netelligent Dual 10/100 TX PCI UTP", 0),
+	PCI_ROM(0x0e11, 0xae43, "netel100pi", "Compaq Netelligent Integrated 10/100 TX UTP", 0),
+	PCI_ROM(0x0e11, 0xb011, "netel100i", "Compaq Netelligent 10/100 TX Embedded UTP", 0),
+	PCI_ROM(0x0e11, 0xb012, "netelligent_10_t2", "Compaq Netelligent 10 T/2 PCI UTP/Coax", 0),
+	PCI_ROM(0x0e11, 0xb030, "netelligent_10_100_ws_5100", "Compaq Netelligent 10/100 TX UTP", 0),
 	PCI_ROM(0x0e11, 0xf130, "thunder", "Compaq NetFlex-3/P", 0),
 	PCI_ROM(0x0e11, 0xf150, "netflex3b", "Compaq NetFlex-3/P", 0),
-	PCI_ROM(0x0e11, 0xae43, "netel100pi", "Compaq Netelligent Integrated 10/100 TX UTP", 0),
-	PCI_ROM(0x0e11, 0xae40, "netel100d", "Compaq Netelligent Dual 10/100 TX PCI UTP", 0),
-	PCI_ROM(0x0e11, 0xb011, "netel100i", "Compaq Netelligent 10/100 TX Embedded UTP", 0),
-	PCI_ROM(0x108d, 0x0013, "oc2183", "Olicom OC-2183/2185", 0),
 	PCI_ROM(0x108d, 0x0012, "oc2325", "Olicom OC-2325", 0),
+	PCI_ROM(0x108d, 0x0013, "oc2183", "Olicom OC-2183/2185", 0),
 	PCI_ROM(0x108d, 0x0014, "oc2326", "Olicom OC-2326", 0),
-	PCI_ROM(0x0e11, 0xb030, "netelligent_10_100_ws_5100", "Compaq Netelligent 10/100 TX UTP", 0),
-	PCI_ROM(0x0e11, 0xb012, "netelligent_10_t2", "Compaq Netelligent 10 T/2 PCI UTP/Coax", 0),
 };
 
 PCI_DRIVER ( tlan_driver, tlan_nics, PCI_NO_CLASS );
 
 DRIVER ( "TLAN/PCI", nic_driver, pci_driver, tlan_driver,
-	 tlan_probe, tlan_disable );
+	 tlan_probe, tlan_disable, tlan_buffers );
 
 /*
  * Local variables:

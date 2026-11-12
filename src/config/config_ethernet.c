@@ -20,6 +20,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <config/general.h>
 
@@ -45,4 +46,10 @@ REQUIRE_OBJECT ( stp );
 #endif
 #ifdef NET_PROTO_LACP
 REQUIRE_OBJECT ( eth_slow );
+#endif
+#ifdef NET_PROTO_EAPOL
+REQUIRE_OBJECT ( eapol );
+#endif
+#ifdef NET_PROTO_LLDP
+REQUIRE_OBJECT ( lldp );
 #endif

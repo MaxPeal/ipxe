@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <unistd.h>
@@ -95,6 +96,10 @@ static int lan78xx_fetch_mac ( struct smscusb_device *smscusb ) {
 
 	/* Read MAC address from OTP, if present */
 	if ( ( rc = smscusb_otp_fetch_mac ( smscusb, LAN78XX_OTP_BASE ) ) == 0 )
+		return 0;
+
+	/* Read MAC address from device tree, if present */
+	if ( ( rc = smscusb_fdt_fetch_mac ( smscusb ) ) == 0 )
 		return 0;
 
 	/* Otherwise, generate a random MAC address */
@@ -194,6 +199,13 @@ static int lan78xx_open ( struct net_device *netdev ) {
 				     LAN78XX_BULK_IN_DLY_SET ( 0 ) ) ) != 0 )
 		goto err_bulk_in_dly;
 
+	/* Enable automatic speed and duplex detection */
+	if ( ( rc = smscusb_writel ( smscusb, LAN78XX_MAC_CR,
+				     ( LAN78XX_MAC_CR_ADP |
+				       LAN78XX_MAC_CR_ADD |
+				       LAN78XX_MAC_CR_ASD ) ) ) != 0 )
+		goto err_mac_cr;
+
 	/* Configure receive filters */
 	if ( ( rc = smscusb_writel ( smscusb, LAN78XX_RFE_CTL,
 				     ( LAN78XX_RFE_CTL_AB |
@@ -252,6 +264,7 @@ static int lan78xx_open ( struct net_device *netdev ) {
  err_fct_tx_ctl:
  err_fct_rx_ctl:
  err_rfe_ctl:
+ err_mac_cr:
  err_bulk_in_dly:
  err_int_ep_ctl:
 	usbnet_close ( &smscusb->usbnet );
@@ -374,16 +387,8 @@ static void lan78xx_remove ( struct usb_function *func ) {
 
 /** LAN78xx device IDs */
 static struct usb_device_id lan78xx_ids[] = {
-	{
-		.name = "lan7800",
-		.vendor = 0x0424,
-		.product = 0x7800,
-	},
-	{
-		.name = "lan7850",
-		.vendor = 0x0424,
-		.product = 0x7850,
-	},
+	USB_ROM ( 0x0424, 0x7800, "lan7800", "SMSC LAN7800", 0 ),
+	USB_ROM ( 0x0424, 0x7850, "lan7850", "SMSC LAN7850", 0 ),
 };
 
 /** LAN78xx driver */

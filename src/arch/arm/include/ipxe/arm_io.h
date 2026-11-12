@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #ifdef IOAPI_ARM
 #define IOAPI_PREFIX_arm
@@ -15,13 +16,12 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define IOAPI_PREFIX_arm __arm_
 #endif
 
+#include <ipxe/dummy_pio.h>
+
 /*
  * Memory space mappings
  *
  */
-
-/** Page shift */
-#define PAGE_SHIFT 12
 
 /*
  * Physical<->Bus address mappings
@@ -43,50 +43,42 @@ IOAPI_INLINE ( arm, bus_to_phys ) ( unsigned long bus_addr ) {
  *
  */
 
-#define ARM_READX( _api_func, _type, _insn_suffix, _reg_prefix )	      \
+#define ARM_READX( _suffix, _type, _insn_suffix, _reg_prefix )		      \
 static inline __always_inline _type					      \
-IOAPI_INLINE ( arm, _api_func ) ( volatile _type *io_addr ) {		      \
+IOAPI_INLINE ( arm, read ## _suffix ) ( volatile _type *io_addr ) {	      \
 	_type data;							      \
 	__asm__ __volatile__ ( "ldr" _insn_suffix " %" _reg_prefix "0, %1"    \
 			       : "=r" ( data ) : "Qo" ( *io_addr ) );	      \
 	return data;							      \
 }
 #ifdef __aarch64__
-ARM_READX ( readb, uint8_t, "b", "w" );
-ARM_READX ( readw, uint16_t, "h", "w" );
-ARM_READX ( readl, uint32_t, "", "w" );
-ARM_READX ( readq, uint64_t, "", "" );
+ARM_READX ( b, uint8_t, "b", "w" );
+ARM_READX ( w, uint16_t, "h", "w" );
+ARM_READX ( l, uint32_t, "", "w" );
+ARM_READX ( q, uint64_t, "", "" );
 #else
-ARM_READX ( readb, uint8_t, "b", "" );
-ARM_READX ( readw, uint16_t, "h", "" );
-ARM_READX ( readl, uint32_t, "", "" );
+ARM_READX ( b, uint8_t, "b", "" );
+ARM_READX ( w, uint16_t, "h", "" );
+ARM_READX ( l, uint32_t, "", "" );
 #endif
 
-#define ARM_WRITEX( _api_func, _type, _insn_suffix, _reg_prefix )			\
+#define ARM_WRITEX( _suffix, _type, _insn_suffix, _reg_prefix )		      \
 static inline __always_inline void					      \
-IOAPI_INLINE ( arm, _api_func ) ( _type data, volatile _type *io_addr ) {     \
+IOAPI_INLINE ( arm, write ## _suffix ) ( _type data,			      \
+					 volatile _type *io_addr ) {	      \
 	__asm__ __volatile__ ( "str" _insn_suffix " %" _reg_prefix "0, %1"    \
 			       : : "r" ( data ), "Qo" ( *io_addr ) );	      \
 }
 #ifdef __aarch64__
-ARM_WRITEX ( writeb, uint8_t, "b", "w" );
-ARM_WRITEX ( writew, uint16_t, "h", "w" );
-ARM_WRITEX ( writel, uint32_t, "", "w" );
-ARM_WRITEX ( writeq, uint64_t, "", "" );
+ARM_WRITEX ( b, uint8_t, "b", "w" );
+ARM_WRITEX ( w, uint16_t, "h", "w" );
+ARM_WRITEX ( l, uint32_t, "", "w" );
+ARM_WRITEX ( q, uint64_t, "", "" );
 #else
-ARM_WRITEX ( writeb, uint8_t, "b", "" );
-ARM_WRITEX ( writew, uint16_t, "h", "" );
-ARM_WRITEX ( writel, uint32_t, "", "" );
+ARM_WRITEX ( b, uint8_t, "b", "" );
+ARM_WRITEX ( w, uint16_t, "h", "" );
+ARM_WRITEX ( l, uint32_t, "", "" );
 #endif
-
-/*
- * Slow down I/O
- *
- */
-static inline __always_inline void
-IOAPI_INLINE ( arm, iodelay ) ( void ) {
-	/* Nothing to do */
-}
 
 /*
  * Memory barrier
@@ -101,5 +93,8 @@ IOAPI_INLINE ( arm, mb ) ( void ) {
 	__asm__ __volatile__ ( "dmb" );
 #endif
 }
+
+/* Dummy PIO */
+DUMMY_PIO ( arm );
 
 #endif /* _IPXE_ARM_IO_H */

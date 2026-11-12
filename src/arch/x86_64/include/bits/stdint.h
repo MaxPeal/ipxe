@@ -1,6 +1,9 @@
 #ifndef _BITS_STDINT_H
 #define _BITS_STDINT_H
 
+FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
+
 typedef __SIZE_TYPE__		size_t;
 typedef signed long		ssize_t;
 typedef signed long		off_t;

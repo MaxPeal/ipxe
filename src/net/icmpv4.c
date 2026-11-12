@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <errno.h>
@@ -53,7 +54,7 @@ static int icmpv4_rx ( struct io_buffer *iobuf,
 		       struct sockaddr_tcpip *st_src,
 		       struct sockaddr_tcpip *st_dest __unused,
 		       uint16_t pshdr_csum __unused ) {
-	struct icmp_header *icmp = iobuf->data;
+	struct icmp_header *icmp;
 	size_t len = iob_len ( iobuf );
 	unsigned int csum;
 	unsigned int type;
@@ -66,6 +67,7 @@ static int icmpv4_rx ( struct io_buffer *iobuf,
 		rc = -EINVAL;
 		goto discard;
 	}
+	icmp = iobuf->data;
 
 	/* Verify checksum */
 	csum = tcpip_chksum ( icmp, len );

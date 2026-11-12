@@ -7,6 +7,9 @@
  *
  */
 
+FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
+
 #include <ipxe/list.h>
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/efi_driver.h>
@@ -17,14 +20,14 @@
 struct efi_usb_device {
 	/** Name */
 	const char *name;
-	/** The underlying USB device */
-	struct usb_device *usb;
-	/** The underlying EFI device */
-	struct efi_device *efidev;
+	/** The underlying USB function */
+	struct usb_function *func;
 	/** Configuration descriptor */
 	struct usb_configuration_descriptor *config;
 	/** Supported languages */
-	struct usb_descriptor_header *languages;
+	uint16_t *lang;
+	/** Length of supported languages */
+	size_t lang_len;
 	/** List of interfaces */
 	struct list_head interfaces;
 };

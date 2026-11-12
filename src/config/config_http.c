@@ -20,6 +20,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <config/general.h>
 
@@ -40,9 +41,9 @@ REQUIRE_OBJECT ( httpbasic );
 #ifdef HTTP_AUTH_DIGEST
 REQUIRE_OBJECT ( httpdigest );
 #endif
+#ifdef HTTP_AUTH_NTLM
+REQUIRE_OBJECT ( httpntlm );
+#endif
 #ifdef HTTP_ENC_PEERDIST
 REQUIRE_OBJECT ( peerdist );
-#endif
-#ifdef HTTP_HACK_GCE
-REQUIRE_OBJECT ( httpgce );
 #endif

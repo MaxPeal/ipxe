@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
@@ -30,19 +31,14 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 
 #include <stdint.h>
-#include <string.h>
-#include <byteswap.h>
 #include <assert.h>
 #include <ipxe/rotate.h>
 #include <ipxe/crypto.h>
-#include <ipxe/asn1.h>
 #include <ipxe/md5.h>
 
 /** MD5 variables */
 struct md5_variables {
-	/* This layout matches that of struct md5_digest_data,
-	 * allowing for efficient endianness-conversion,
-	 */
+	/* This layout matches that of struct md5_digest_data */
 	uint32_t a;
 	uint32_t b;
 	uint32_t c;
@@ -66,11 +62,11 @@ static const uint32_t k[64] = {
 };
 
 /** MD5 shift amounts */
-static const uint8_t r[64] = {
-	7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22, 7, 12, 17, 22,
-	5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20, 5,  9, 14, 20,
-	4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23, 4, 11, 16, 23,
-	6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21, 6, 10, 15, 21
+static const uint8_t r[4][4] = {
+	{  7, 12, 17, 22 },
+	{  5,  9, 14, 20 },
+	{  4, 11, 16, 23 },
+	{  6, 10, 15, 21 },
 };
 
 /**
@@ -129,7 +125,7 @@ struct md5_step {
 };
 
 /** MD5 steps */
-static struct md5_step md5_steps[4] = {
+static const struct md5_step md5_steps[4] = {
 	/** 0 to 15 */
 	{ .f = md5_f_0_15,	.coefficient = 1,	.constant = 0 },
 	/** 16 to 31 */
@@ -140,163 +136,65 @@ static struct md5_step md5_steps[4] = {
 	{ .f = md5_f_48_63,	.coefficient = 7,	.constant = 0 },
 };
 
-/**
- * Initialise MD5 algorithm
- *
- * @v ctx		MD5 context
- */
-static void md5_init ( void *ctx ) {
-	struct md5_context *context = ctx;
-
-	context->ddd.dd.digest.h[0] = cpu_to_le32 ( 0x67452301 );
-	context->ddd.dd.digest.h[1] = cpu_to_le32 ( 0xefcdab89 );
-	context->ddd.dd.digest.h[2] = cpu_to_le32 ( 0x98badcfe );
-	context->ddd.dd.digest.h[3] = cpu_to_le32 ( 0x10325476 );
-	context->len = 0;
-}
+/** MD5 initial digest values */
+static const struct md5_digest md5_init = {
+	.h = { 0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476 }
+};
 
 /**
  * Calculate MD5 digest of accumulated data
  *
- * @v context		MD5 context
+ * @v dd		Digest and data block
+ * @v digest		Copy of current digest value
  */
-static void md5_digest ( struct md5_context *context ) {
+static void md5_compress ( struct md5_digest_data *dd,
+			   const struct md5_digest *digest ) {
         union {
-		union md5_digest_data_dwords ddd;
+		struct md5_digest_data dd;
 		struct md5_variables v;
-	} u;
-	uint32_t *a = &u.v.a;
-	uint32_t *b = &u.v.b;
-	uint32_t *c = &u.v.c;
-	uint32_t *d = &u.v.d;
-	uint32_t *w = u.v.w;
+	} *u = container_of ( dd, typeof ( *u ), dd );
+	struct md5_variables *v = &u->v;
+	const struct md5_step *step;
+	uint32_t *a = &v->a;
+	uint32_t *b = &v->b;
+	uint32_t *c = &v->c;
+	uint32_t *d = &v->d;
+	uint32_t *w = v->w;
 	uint32_t f;
 	uint32_t g;
 	uint32_t temp;
-	struct md5_step *step;
+	unsigned int round;
 	unsigned int i;
 
 	/* Sanity checks */
-	assert ( ( context->len % sizeof ( context->ddd.dd.data ) ) == 0 );
-	linker_assert ( &u.ddd.dd.digest.h[0] == a, md5_bad_layout );
-	linker_assert ( &u.ddd.dd.digest.h[1] == b, md5_bad_layout );
-	linker_assert ( &u.ddd.dd.digest.h[2] == c, md5_bad_layout );
-	linker_assert ( &u.ddd.dd.digest.h[3] == d, md5_bad_layout );
-	linker_assert ( &u.ddd.dd.data.dword[0] == w, md5_bad_layout );
-
-	DBGC ( context, "MD5 digesting:\n" );
-	DBGC_HDA ( context, 0, &context->ddd.dd.digest,
-		   sizeof ( context->ddd.dd.digest ) );
-	DBGC_HDA ( context, context->len, &context->ddd.dd.data,
-		   sizeof ( context->ddd.dd.data ) );
-
-	/* Convert h[0..3] to host-endian, and initialise a, b, c, d,
-	 * and w[0..15]
-	 */
-	for ( i = 0 ; i < ( sizeof ( u.ddd.dword ) /
-			    sizeof ( u.ddd.dword[0] ) ) ; i++ ) {
-		le32_to_cpus ( &context->ddd.dword[i] );
-		u.ddd.dword[i] = context->ddd.dword[i];
-	}
+	build_assert ( &u->dd.digest.h[0] == a );
+	build_assert ( &u->dd.digest.h[1] == b );
+	build_assert ( &u->dd.digest.h[2] == c );
+	build_assert ( &u->dd.digest.h[3] == d );
+	build_assert ( &u->dd.data.dword[0] == w );
+	build_assert ( sizeof ( u->dd ) == sizeof ( u->v ) );
 
 	/* Main loop */
 	for ( i = 0 ; i < 64 ; i++ ) {
-		step = &md5_steps[ i / 16 ];
-		f = step->f ( &u.v );
+		round = ( i / 16 );
+		step = &md5_steps[round];
+		f = step->f ( v );
 		g = ( ( ( step->coefficient * i ) + step->constant ) % 16 );
 		temp = *d;
 		*d = *c;
 		*c = *b;
-		*b = ( *b + rol32 ( ( *a + f + k[i] + w[g] ), r[i] ) );
+		*b = ( *b + rol32 ( ( *a + f + k[i] + w[g] ),
+				    r[round][ i % 4 ] ) );
 		*a = temp;
-		DBGC2 ( context, "%2d : %08x %08x %08x %08x\n",
+		DBGC2 ( &md5_algorithm, "%2d : %08x %08x %08x %08x\n",
 			i, *a, *b, *c, *d );
 	}
 
-	/* Add chunk to hash and convert back to big-endian */
-	for ( i = 0 ; i < 4 ; i++ ) {
-		context->ddd.dd.digest.h[i] =
-			cpu_to_le32 ( context->ddd.dd.digest.h[i] +
-				      u.ddd.dd.digest.h[i] );
-	}
-
-	DBGC ( context, "MD5 digested:\n" );
-	DBGC_HDA ( context, 0, &context->ddd.dd.digest,
-		   sizeof ( context->ddd.dd.digest ) );
-}
-
-/**
- * Accumulate data with MD5 algorithm
- *
- * @v ctx		MD5 context
- * @v data		Data
- * @v len		Length of data
- */
-static void md5_update ( void *ctx, const void *data, size_t len ) {
-	struct md5_context *context = ctx;
-	const uint8_t *byte = data;
-	size_t offset;
-
-	/* Accumulate data a byte at a time, performing the digest
-	 * whenever we fill the data buffer
-	 */
-	while ( len-- ) {
-		offset = ( context->len % sizeof ( context->ddd.dd.data ) );
-		context->ddd.dd.data.byte[offset] = *(byte++);
-		context->len++;
-		if ( ( context->len % sizeof ( context->ddd.dd.data ) ) == 0 )
-			md5_digest ( context );
-	}
-}
-
-/**
- * Generate MD5 digest
- *
- * @v ctx		MD5 context
- * @v out		Output buffer
- */
-static void md5_final ( void *ctx, void *out ) {
-	struct md5_context *context = ctx;
-	uint64_t len_bits;
-	uint8_t pad;
-
-	/* Record length before pre-processing */
-	len_bits = cpu_to_le64 ( ( ( uint64_t ) context->len ) * 8 );
-
-	/* Pad with a single "1" bit followed by as many "0" bits as required */
-	pad = 0x80;
-	do {
-		md5_update ( ctx, &pad, sizeof ( pad ) );
-		pad = 0x00;
-	} while ( ( context->len % sizeof ( context->ddd.dd.data ) ) !=
-		  offsetof ( typeof ( context->ddd.dd.data ), final.len ) );
-
-	/* Append length (in bits) */
-	md5_update ( ctx, &len_bits, sizeof ( len_bits ) );
-	assert ( ( context->len % sizeof ( context->ddd.dd.data ) ) == 0 );
-
-	/* Copy out final digest */
-	memcpy ( out, &context->ddd.dd.digest,
-		 sizeof ( context->ddd.dd.digest ) );
+	/* Add chunk to hash */
+	for ( i = 0 ; i < 4 ; i++ )
+		dd->digest.h[i] += digest->h[i];
 }
 
 /** MD5 algorithm */
-struct digest_algorithm md5_algorithm = {
-	.name		= "md5",
-	.ctxsize	= sizeof ( struct md5_context ),
-	.blocksize	= sizeof ( union md5_block ),
-	.digestsize	= sizeof ( struct md5_digest ),
-	.init		= md5_init,
-	.update		= md5_update,
-	.final		= md5_final,
-};
-
-/** "md5" object identifier */
-static uint8_t oid_md5[] = { ASN1_OID_MD5 };
-
-/** "md5" OID-identified algorithm */
-struct asn1_algorithm oid_md5_algorithm __asn1_algorithm = {
-	.name = "md5",
-	.digest = &md5_algorithm,
-	.oid = ASN1_OID_CURSOR ( oid_md5 ),
-};
+MDHASH_ALGORITHM ( md5, md5_algorithm, md5_compress, __LITTLE_ENDIAN,
+		   struct md5_digest_data, md5_init, MD5_DIGEST_SIZE );

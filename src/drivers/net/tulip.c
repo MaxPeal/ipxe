@@ -426,13 +426,14 @@ struct tulip_private {
 
 #define TX_RING_SIZE	2
 #define RX_RING_SIZE	4
-struct {
+struct tulip_bss {
     struct tulip_tx_desc tx_ring[TX_RING_SIZE];
     unsigned char txb[BUFLEN];
     struct tulip_rx_desc rx_ring[RX_RING_SIZE];
     unsigned char rxb[RX_RING_SIZE * BUFLEN];
     struct tulip_private tpx;
-} tulip_bss __shared __attribute__ ((aligned(4)));
+};
+#define tulip_bss NIC_FAKE_BSS ( struct tulip_bss )
 #define tx_ring tulip_bss.tx_ring
 #define txb tulip_bss.txb
 #define rx_ring tulip_bss.rx_ring
@@ -494,7 +495,7 @@ static void tulip_reset(struct nic *nic);
 static void tulip_transmit(struct nic *nic, const char *d, unsigned int t,
                            unsigned int s, const char *p);
 static int tulip_poll(struct nic *nic, int retrieve);
-static void tulip_disable(struct nic *nic);
+static void tulip_disable(struct nic *nic, void *hwdev);
 static void nway_start(struct nic *nic);
 static void pnic_do_nway(struct nic *nic);
 static void select_media(struct nic *nic, int startup);
@@ -1128,7 +1129,7 @@ static int tulip_poll(struct nic *nic, int retrieve)
 /*********************************************************************/
 /* eth_disable - Disable the interface                               */
 /*********************************************************************/
-static void tulip_disable ( struct nic *nic ) {
+static void tulip_disable ( struct nic *nic, void *hwdev __unused ) {
 
     whereami("tulip_disable\n");
 
@@ -1921,31 +1922,30 @@ PCI_ROM(0x1011, 0x0002, "dc21040",     "Digital Tulip", 0),
 PCI_ROM(0x1011, 0x0009, "ds21140",     "Digital Tulip Fast", 0),
 PCI_ROM(0x1011, 0x0014, "dc21041",     "Digital Tulip+", 0),
 PCI_ROM(0x1011, 0x0019, "ds21142",     "Digital Tulip 21142", 0),
+PCI_ROM(0x104a, 0x0981, "tulip-0981",  "Tulip 0x104a 0x0981", 0),
+PCI_ROM(0x104a, 0x2774, "SGThomson-STE10100A", "Tulip 0x104a 0x2774", 0),	/*Modified by Ramesh Chander*/
 PCI_ROM(0x10b7, 0x9300, "3csoho100b-tx","3ComSOHO100B-TX", 0),
 PCI_ROM(0x10b9, 0x5261, "ali1563",     "ALi 1563 integrated ethernet", 0),
 PCI_ROM(0x10d9, 0x0512, "mx98713",     "Macronix MX987x3", 0),
 PCI_ROM(0x10d9, 0x0531, "mx98715",     "Macronix MX987x5", 0),
+PCI_ROM(0x1113, 0x1216, "an983",       "ADMTek AN983 Comet", 0),
 PCI_ROM(0x1113, 0x1217, "mxic-98715",  "Macronix MX987x5", 0),
-PCI_ROM(0x11ad, 0xc115, "lc82c115",    "LinkSys LNE100TX", 0),
+PCI_ROM(0x1113, 0x9511, "tulip-9511",  "Tulip 0x1113 0x9511", 0),
+PCI_ROM(0x115d, 0x0003, "xircomtulip", "Xircom Tulip", 0),
+PCI_ROM(0x1186, 0x1561, "tulip-1561",  "Tulip 0x1186 0x1561", 0),
 PCI_ROM(0x11ad, 0x0002, "82c168",      "Netgear FA310TX", 0),
+PCI_ROM(0x11ad, 0xc115, "lc82c115",    "LinkSys LNE100TX", 0),
+PCI_ROM(0x11f6, 0x9881, "rl100tx",     "Compex RL100-TX", 0),
+PCI_ROM(0x1259, 0xa120, "tulip-a120",  "Tulip 0x1259 0xa120", 0),
+PCI_ROM(0x125b, 0x1400, "ax88140",     "ASIX AX88140", 0),
+PCI_ROM(0x1282, 0x9009, "dm9009",      "Davicom 9009", 0),
 PCI_ROM(0x1282, 0x9100, "dm9100",      "Davicom 9100", 0),
 PCI_ROM(0x1282, 0x9102, "dm9102",      "Davicom 9102", 0),
-PCI_ROM(0x1282, 0x9009, "dm9009",      "Davicom 9009", 0),
 PCI_ROM(0x1282, 0x9132, "dm9132",      "Davicom 9132", 0),
-PCI_ROM(0x1317, 0x0985, "centaur-p",   "ADMtek Centaur-P", 0),
 PCI_ROM(0x1317, 0x0981, "an981",       "ADMtek AN981 Comet", 0),		/* ADMTek Centaur-P (stmicro) */
-PCI_ROM(0x1113, 0x1216, "an983",       "ADMTek AN983 Comet", 0),
-PCI_ROM(0x1317, 0x9511, "an983b",      "ADMTek Comet 983b", 0),
+PCI_ROM(0x1317, 0x0985, "centaur-p",   "ADMtek Centaur-P", 0),
 PCI_ROM(0x1317, 0x1985, "centaur-c",   "ADMTek Centaur-C", 0),
-PCI_ROM(0x8086, 0x0039, "intel21145",  "Intel Tulip", 0),
-PCI_ROM(0x125b, 0x1400, "ax88140",     "ASIX AX88140", 0),
-PCI_ROM(0x11f6, 0x9881, "rl100tx",     "Compex RL100-TX", 0),
-PCI_ROM(0x115d, 0x0003, "xircomtulip", "Xircom Tulip", 0),
-PCI_ROM(0x104a, 0x0981, "tulip-0981",  "Tulip 0x104a 0x0981", 0),
-PCI_ROM(0x104a, 0x2774, "SGThomson-STE10100A", "Tulip 0x104a 0x2774", 0),	/*Modified by Ramesh Chander*/
-PCI_ROM(0x1113, 0x9511, "tulip-9511",  "Tulip 0x1113 0x9511", 0),
-PCI_ROM(0x1186, 0x1561, "tulip-1561",  "Tulip 0x1186 0x1561", 0),
-PCI_ROM(0x1259, 0xa120, "tulip-a120",  "Tulip 0x1259 0xa120", 0),
+PCI_ROM(0x1317, 0x9511, "an983b",      "ADMTek Comet 983b", 0),
 PCI_ROM(0x13d1, 0xab02, "tulip-ab02",  "Tulip 0x13d1 0xab02", 0),
 PCI_ROM(0x13d1, 0xab03, "tulip-ab03",  "Tulip 0x13d1 0xab03", 0),
 PCI_ROM(0x13d1, 0xab08, "tulip-ab08",  "Tulip 0x13d1 0xab08", 0),
@@ -1953,12 +1953,13 @@ PCI_ROM(0x14f1, 0x1803, "lanfinity",   "Conexant LANfinity", 0),
 PCI_ROM(0x1626, 0x8410, "tulip-8410",  "Tulip 0x1626 0x8410", 0),
 PCI_ROM(0x1737, 0xab08, "tulip-1737-ab08","Tulip 0x1737 0xab08", 0),
 PCI_ROM(0x1737, 0xab09, "tulip-ab09",  "Tulip 0x1737 0xab09", 0),
+PCI_ROM(0x8086, 0x0039, "intel21145",  "Intel Tulip", 0),
 };
 
 PCI_DRIVER ( tulip_driver, tulip_nics, PCI_NO_CLASS );
 
 DRIVER ( "Tulip", nic_driver, pci_driver, tulip_driver,
-	 tulip_probe, tulip_disable );
+	 tulip_probe, tulip_disable, tulip_bss );
 
 /*
  * Local variables:

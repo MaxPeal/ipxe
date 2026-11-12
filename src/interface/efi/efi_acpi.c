@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /**
  * @file
@@ -31,6 +32,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
  */
 
 #include <ipxe/acpi.h>
+#include <ipxe/uaccess.h>
 #include <ipxe/efi/efi.h>
 #include <ipxe/efi/Guid/Acpi.h>
 #include <ipxe/efi/efi_acpi.h>
@@ -39,18 +41,29 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 static EFI_ACPI_1_0_ROOT_SYSTEM_DESCRIPTION_POINTER *rsdp;
 EFI_USE_TABLE ( ACPI_10_TABLE, &rsdp, 0 );
 
+/** ACPI configuration table (alternative GUID) */
+static EFI_ACPI_2_0_ROOT_SYSTEM_DESCRIPTION_POINTER *rsdp2;
+EFI_USE_TABLE ( EFI_ACPI_20_TABLE, &rsdp2, 0 );
+
 /**
  * Locate ACPI root system description table
  *
- * @ret rsdt		ACPI root system description table, or UNULL
+ * @ret rsdt		ACPI root system description table, or NULL
  */
-static userptr_t efi_find_rsdt ( void ) {
+static const struct acpi_rsdt * efi_find_rsdt ( void ) {
 
 	/* Locate RSDT via ACPI configuration table, if available */
-	if ( rsdp )
-		return phys_to_user ( rsdp->RsdtAddress );
+	if ( ( sizeof ( physaddr_t ) > sizeof ( uint32_t ) ) &&
+	     rsdp2 && rsdp2->XsdtAddress ) {
+		return phys_to_virt ( rsdp2->XsdtAddress );
+	} else if ( rsdp2 && rsdp2->RsdtAddress ) {
+		return phys_to_virt ( rsdp2->RsdtAddress );
+	} else if ( rsdp && rsdp->RsdtAddress ) {
+		return phys_to_virt ( rsdp->RsdtAddress );
+	}
 
-	return UNULL;
+	return NULL;
 }
 
 PROVIDE_ACPI ( efi, acpi_find_rsdt, efi_find_rsdt );
+PROVIDE_ACPI_INLINE ( efi, acpi_find );

@@ -28,7 +28,7 @@ FILE_LICENCE(GPL2_OR_LATER);
 
 #include <ipxe/init.h>
 #include <ipxe/keys.h>
-#include <linux_api.h>
+#include <ipxe/linux_api.h>
 
 #include <linux/termios.h>
 #include <asm/errno.h>
@@ -43,8 +43,10 @@ FILE_LICENCE(GPL2_OR_LATER);
 
 static void linux_console_putchar(int c)
 {
+	char ch = c;
+
 	/* write to stdout */
-	if (linux_write(1, &c, 1) != 1)
+	if (linux_write(1, &ch, sizeof (ch)) != 1)
 		DBG("linux_console write failed (%s)\n", linux_strerror(linux_errno));
 }
 
@@ -150,6 +152,7 @@ static void linux_console_shutdown(int flags __unused)
 }
 
 struct startup_fn linux_console_startup_fn __startup_fn(STARTUP_EARLY) = {
+	.name = "linux_console",
 	.startup = linux_console_startup,
 	.shutdown = linux_console_shutdown,
 };

@@ -34,6 +34,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
@@ -79,7 +80,7 @@ static void hmac_drbg_update_key ( struct digest_algorithm *hash,
 				   struct hmac_drbg_state *state,
 				   const void *data, size_t len,
 				   const uint8_t single ) {
-	uint8_t context[ hash->ctxsize ];
+	uint8_t context[ hmac_ctxsize ( hash ) ];
 	size_t out_len = hash->digestsize;
 
 	DBGC ( state, "HMAC_DRBG_%s %p provided data :\n", hash->name, state );
@@ -92,13 +93,11 @@ static void hmac_drbg_update_key ( struct digest_algorithm *hash,
 	assert ( ( single == 0x00 ) || ( single == 0x01 ) );
 
 	/* K = HMAC ( K, V || single || provided_data ) */
-	hmac_init ( hash, context, state->key, &out_len );
-	assert ( out_len == hash->digestsize );
+	hmac_init ( hash, context, state->key, out_len );
 	hmac_update ( hash, context, state->value, out_len );
 	hmac_update ( hash, context, &single, sizeof ( single ) );
 	hmac_update ( hash, context, data, len );
-	hmac_final ( hash, context, state->key, &out_len, state->key );
-	assert ( out_len == hash->digestsize );
+	hmac_final ( hash, context, state->key );
 
 	DBGC ( state, "HMAC_DRBG_%s %p K = HMAC ( K, V || %#02x || "
 	       "provided_data ) :\n", hash->name, state, single );
@@ -122,7 +121,7 @@ static void hmac_drbg_update_key ( struct digest_algorithm *hash,
  */
 static void hmac_drbg_update_value ( struct digest_algorithm *hash,
 				     struct hmac_drbg_state *state ) {
-	uint8_t context[ hash->ctxsize ];
+	uint8_t context[ hmac_ctxsize ( hash ) ];
 	size_t out_len = hash->digestsize;
 
 	/* Sanity checks */
@@ -130,11 +129,9 @@ static void hmac_drbg_update_value ( struct digest_algorithm *hash,
 	assert ( state != NULL );
 
 	/* V = HMAC ( K, V ) */
-	hmac_init ( hash, context, state->key, &out_len );
-	assert ( out_len == hash->digestsize );
+	hmac_init ( hash, context, state->key, out_len );
 	hmac_update ( hash, context, state->value, out_len );
-	hmac_final ( hash, context, state->key, &out_len, state->value );
-	assert ( out_len == hash->digestsize );
+	hmac_final ( hash, context, state->value );
 
 	DBGC ( state, "HMAC_DRBG_%s %p V = HMAC ( K, V ) :\n",
 	       hash->name, state );

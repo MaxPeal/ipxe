@@ -32,6 +32,7 @@
 #include <usr/autoboot.h>
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
@@ -47,14 +48,20 @@ struct sanboot_options {
 	int no_describe;
 	/** Keep SAN device */
 	int keep;
-	/** Filename */
+	/** Boot filename */
 	char *filename;
+	/** Required extra filename */
+	char *extra;
+	/** Volume label */
+	char *label;
+	/** UUID */
+	struct uuid_option uuid;
 };
 
 /** "sanboot" option list */
 static union {
-	/* "sanboot" takes all four options */
-	struct option_descriptor sanboot[4];
+	/* "sanboot" takes all options */
+	struct option_descriptor sanboot[7];
 	/* "sanhook" takes only --drive and --no-describe */
 	struct option_descriptor sanhook[2];
 	/* "sanunhook" takes only --drive */
@@ -69,9 +76,14 @@ static union {
 			      struct sanboot_options, keep, parse_flag ),
 		OPTION_DESC ( "filename", 'f', required_argument,
 			      struct sanboot_options, filename, parse_string ),
+		OPTION_DESC ( "extra", 'e', required_argument,
+			      struct sanboot_options, extra, parse_string ),
+		OPTION_DESC ( "label", 'l', required_argument,
+			      struct sanboot_options, label, parse_string ),
+		OPTION_DESC ( "uuid", 'u', required_argument,
+			      struct sanboot_options, uuid, parse_uuid ),
 	},
 };
-
 
 /** "sanhook" command descriptor */
 static struct command_descriptor sanhook_cmd =
@@ -100,6 +112,7 @@ static int sanboot_core_exec ( int argc, char **argv,
 			       struct command_descriptor *cmd,
 			       int default_flags, int no_root_path_flags ) {
 	struct sanboot_options opts;
+	struct san_boot_config config;
 	struct uri *uris[argc];
 	int count;
 	int flags;
@@ -124,6 +137,12 @@ static int sanboot_core_exec ( int argc, char **argv,
 		}
 	}
 
+	/* Construct configuration parameters */
+	config.filename = opts.filename;
+	config.extra = opts.extra;
+	config.label = opts.label;
+	config.uuid = opts.uuid.value;
+
 	/* Construct flags */
 	flags = default_flags;
 	if ( opts.no_describe )
@@ -134,7 +153,7 @@ static int sanboot_core_exec ( int argc, char **argv,
 		flags |= no_root_path_flags;
 
 	/* Boot from root path */
-	if ( ( rc = uriboot ( NULL, uris, count, opts.drive, opts.filename,
+	if ( ( rc = uriboot ( NULL, uris, count, opts.drive, &config,
 			      flags ) ) != 0 )
 		goto err_uriboot;
 
@@ -186,17 +205,6 @@ static int sanunhook_exec ( int argc, char **argv ) {
 }
 
 /** SAN commands */
-struct command sanboot_commands[] __command = {
-	{
-		.name = "sanhook",
-		.exec = sanhook_exec,
-	},
-	{
-		.name = "sanboot",
-		.exec = sanboot_exec,
-	},
-	{
-		.name = "sanunhook",
-		.exec = sanunhook_exec,
-	},
-};
+COMMAND ( sanhook, sanhook_exec );
+COMMAND ( sanboot, sanboot_exec );
+COMMAND ( sanunhook, sanunhook_exec );

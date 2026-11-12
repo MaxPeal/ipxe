@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /**
  * @file
@@ -43,13 +44,32 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 			  "No username available for Basic authentication" )
 
 /**
+ * Parse HTTP "WWW-Authenticate" header for Basic authentication
+ *
+ * @v http		HTTP transaction
+ * @v line		Remaining header line
+ * @ret rc		Return status code
+ */
+static int http_parse_basic_auth ( struct http_transaction *http,
+				   char *line __unused ) {
+
+	/* Allow HTTP request to be retried if the request had not
+	 * already tried authentication.
+	 */
+	if ( ! http->request.auth.auth )
+		http->response.flags |= HTTP_RESPONSE_RETRY;
+
+	return 0;
+}
+
+/**
  * Perform HTTP Basic authentication
  *
  * @v http		HTTP transaction
  * @ret rc		Return status code
  */
 static int http_basic_authenticate ( struct http_transaction *http ) {
-	struct http_request_auth *req = &http->request.auth;
+	struct http_request_auth_basic *req = &http->request.auth.basic;
 
 	/* Record username and password */
 	if ( ! http->uri->user ) {
@@ -73,26 +93,34 @@ static int http_basic_authenticate ( struct http_transaction *http ) {
  */
 static int http_format_basic_auth ( struct http_transaction *http,
 				    char *buf, size_t len ) {
-	struct http_request_auth *req = &http->request.auth;
-	size_t user_pw_len = ( strlen ( req->username ) + 1 /* ":" */ +
-			       strlen ( req->password ) );
-	char user_pw[ user_pw_len + 1 /* NUL */ ];
+	struct http_request_auth_basic *req = &http->request.auth.basic;
+	char *user_pw;
+	int user_pw_len;
+	size_t encoded;
 
 	/* Sanity checks */
 	assert ( req->username != NULL );
 	assert ( req->password != NULL );
 
-	/* Construct "user:password" string */
-	snprintf ( user_pw, sizeof ( user_pw ), "%s:%s",
-		   req->username, req->password );
+	/* Construct temporary "user:password" string */
+	user_pw_len = asprintf ( &user_pw, "%s:%s", req->username,
+				 req->password );
+	if ( user_pw_len < 0 )
+		return -ENOMEM;
 
 	/* Construct response */
-	return base64_encode ( user_pw, user_pw_len, buf, len );
+	encoded = base64_encode ( user_pw, user_pw_len, buf, len );
+
+	/* Free temporary string */
+	free ( user_pw );
+
+	return encoded;
 }
 
 /** HTTP Basic authentication scheme */
 struct http_authentication http_basic_auth __http_authentication = {
 	.name = "Basic",
+	.parse = http_parse_basic_auth,
 	.authenticate = http_basic_authenticate,
 	.format = http_format_basic_auth,
 };

@@ -3,53 +3,32 @@
   This protocol is used to allow code running in the boot services environment
   to perform lexical comparison functions on Unicode strings for given languages.
 
-Copyright (c) 2006 - 2011, Intel Corporation. All rights reserved.<BR>
-This program and the accompanying materials are licensed and made available under
-the terms and conditions of the BSD License that accompanies this distribution.
-The full text of the license may be found at
-http://opensource.org/licenses/bsd-license.php.
-
-THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
-WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+Copyright (c) 2006 - 2018, Intel Corporation. All rights reserved.<BR>
+SPDX-License-Identifier: BSD-2-Clause-Patent
 
 **/
 
-#ifndef __UNICODE_COLLATION_H__
-#define __UNICODE_COLLATION_H__
+#pragma once
 
-FILE_LICENCE ( BSD3 );
-
-#define EFI_UNICODE_COLLATION_PROTOCOL_GUID \
-  { \
-    0x1d85cd7f, 0xf43d, 0x11d2, {0x9a, 0xc, 0x0, 0x90, 0x27, 0x3f, 0xc1, 0x4d } \
-  }
+FILE_LICENCE ( BSD2_PATENT );
+FILE_SECBOOT ( PERMITTED );
 
 #define EFI_UNICODE_COLLATION_PROTOCOL2_GUID \
   { \
     0xa4c751fc, 0x23ae, 0x4c3e, {0x92, 0xe9, 0x49, 0x64, 0xcf, 0x63, 0xf3, 0x49 } \
   }
 
-typedef struct _EFI_UNICODE_COLLATION_PROTOCOL  EFI_UNICODE_COLLATION_PROTOCOL;
-
-
-///
-/// Protocol GUID name defined in EFI1.1.
-///
-#define UNICODE_COLLATION_PROTOCOL              EFI_UNICODE_COLLATION_PROTOCOL_GUID
-
-///
-/// Protocol defined in EFI1.1.
-///
-typedef EFI_UNICODE_COLLATION_PROTOCOL          UNICODE_COLLATION_INTERFACE;
+typedef struct _EFI_UNICODE_COLLATION_PROTOCOL EFI_UNICODE_COLLATION_PROTOCOL;
 
 ///
 /// Protocol data structures and defines
 ///
-#define EFI_UNICODE_BYTE_ORDER_MARK (CHAR16) (0xfeff)
+#define EFI_UNICODE_BYTE_ORDER_MARK  (CHAR16) (0xfeff)
 
 //
 // Protocol member functions
 //
+
 /**
   Performs a case-insensitive comparison of two Null-terminated strings.
 
@@ -169,26 +148,23 @@ BOOLEAN
 /// comparisons of strings.
 ///
 struct _EFI_UNICODE_COLLATION_PROTOCOL {
-  EFI_UNICODE_COLLATION_STRICOLL    StriColl;
-  EFI_UNICODE_COLLATION_METAIMATCH  MetaiMatch;
-  EFI_UNICODE_COLLATION_STRLWR      StrLwr;
-  EFI_UNICODE_COLLATION_STRUPR      StrUpr;
+  EFI_UNICODE_COLLATION_STRICOLL      StriColl;
+  EFI_UNICODE_COLLATION_METAIMATCH    MetaiMatch;
+  EFI_UNICODE_COLLATION_STRLWR        StrLwr;
+  EFI_UNICODE_COLLATION_STRUPR        StrUpr;
 
   //
   // for supporting fat volumes
   //
-  EFI_UNICODE_COLLATION_FATTOSTR    FatToStr;
-  EFI_UNICODE_COLLATION_STRTOFAT    StrToFat;
+  EFI_UNICODE_COLLATION_FATTOSTR      FatToStr;
+  EFI_UNICODE_COLLATION_STRTOFAT      StrToFat;
 
   ///
   /// A Null-terminated ASCII string array that contains one or more language codes.
   /// When this field is used for UnicodeCollation2, it is specified in RFC 4646 format.
   /// When it is used for UnicodeCollation, it is specified in ISO 639-2 format.
   ///
-  CHAR8                             *SupportedLanguages;
+  CHAR8                               *SupportedLanguages;
 };
 
-extern EFI_GUID gEfiUnicodeCollationProtocolGuid;
-extern EFI_GUID gEfiUnicodeCollation2ProtocolGuid;
-
-#endif
+extern EFI_GUID  gEfiUnicodeCollation2ProtocolGuid;

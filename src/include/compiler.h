@@ -167,6 +167,31 @@
 /** @} */
 
 /**
+ * @defgroup ipxenote Macros to provide ELF notes
+ * @{
+ */
+
+/* Construct an iPXE-specific ELF note */
+#define IPXE_NOTE( type )					\
+	__asm__ ( ".section \".note.ipxe\", \"\", "		\
+		  _S2 ( ASM_TCHAR ) "note\n\t"			\
+		  /* Owner name length */			\
+		  ".long 4\n\t"					\
+		  /* Content length */				\
+		  ".long 0\n\t"					\
+		  /* Type */					\
+		  ".long " _S2 ( _C2 ( IPXE_NOTE_, type ) )	\
+		  "\n\t"					\
+		  /* Owner name */				\
+		  ".ascii \"iPXE\"\n\t"				\
+		  ".previous\n\t" )
+
+/** Build will use a disk-based console log, if present */
+#define IPXE_NOTE_DISKLOG 0x18aed109
+
+/** @} */
+
+/**
  * @defgroup objmacros Macros to provide or require explicit objects
  * @{
  */
@@ -623,28 +648,6 @@ char __debug_disable(OBJECT) = ( DBGLVL_MAX & ~DBGLVL_DFLT );
  */
 #define inline inline __attribute__ (( no_instrument_function ))
 
-/**
- * Shared data.
- *
- * To save space in the binary when multiple-driver images are
- * compiled, uninitialised data areas can be shared between drivers.
- * This will typically be used to share statically-allocated receive
- * and transmit buffers between drivers.
- *
- * Use as e.g.
- *
- * @code
- *
- *   struct {
- *	char	rx_buf[NUM_RX_BUF][RX_BUF_SIZE];
- *	char	tx_buf[TX_BUF_SIZE];
- *   } my_static_data __shared;
- *
- * @endcode
- *
- */
-#define __shared __asm__ ( "_shared_bss" ) __aligned
-
 #endif /* ASSEMBLY */
 /** @} */
 
@@ -661,6 +664,97 @@ char __debug_disable(OBJECT) = ( DBGLVL_MAX & ~DBGLVL_DFLT );
 #ifndef ASSEMBLY
 #define ARRAY_SIZE(array) ( sizeof (array) / sizeof ( (array)[0] ) )
 #endif /* ASSEMBLY */
+
+/** @defgroup abs Absolute symbols
+ * @{
+ */
+#ifndef ASSEMBLY
+
+/** Declare an absolute symbol (e.g. a value defined by a linker script)
+ *
+ * Use as e.g.:
+ *
+ *    extern int ABS_SYMBOL ( _my_symbol );
+ *
+ */
+#define ABS_SYMBOL( name ) name[]
+
+/** Get value of an absolute symbol for use in a static initializer
+ *
+ * Use as e.g.:
+ *
+ *    extern int ABS_SYMBOL ( _my_symbol );
+ *    static int my_symbol = ABS_VALUE_INIT ( _my_symbol );
+ *
+ * Note that the declared type must be at least as large as a pointer
+ * type, since the compiler sees the absolute symbol as being an
+ * address.
+ */
+#define ABS_VALUE_INIT( name ) ( ( typeof ( name[0] ) ) name )
+
+/** Get value of an absolute symbol
+ *
+ * In a position-dependent executable, where all addresses are fixed
+ * at link time, we can use the standard technique as documented by
+ * GNU ld, e.g.:
+ *
+ *    extern char _my_symbol[];
+ *
+ *    printf ( "Absolute symbol value is %x\n", ( ( int ) _my_symbol ) );
+ *
+ * This technique may not work in a position-independent executable.
+ * When dynamic relocations are applied, the runtime addresses will no
+ * longer be equal to the link-time addresses.  If the code to obtain
+ * the address of _my_symbol uses PC-relative addressing, then it
+ * will calculate the runtime "address" of the absolute symbol, which
+ * will no longer be equal the the link-time "address" (i.e. the
+ * correct value) of the absolute symbol.
+ *
+ * We can work around this by instead declaring a static variable to
+ * contain the absolute value, and returning the contents of this
+ * static variable:
+ *
+ *    extern char _my_symbol[];
+ *    static void * volatile my_symbol = _my_symbol;
+ *
+ *    printf ( "Absolute symbol value is %x\n", ( ( int ) my_symbol ) );
+ *
+ * The value of the static variable cannot possibly use PC-relative
+ * addressing (since there is no applicable program counter for
+ * non-code), and so will instead be filled in with the correct
+ * absolute value at link time.  (No dynamic relocation will be
+ * generated that might change its value, since the symbol providing
+ * the value is an absolute symbol.)
+ *
+ * This second technique will work for both position-dependent and
+ * position-independent code, but incurs the unnecssary overhead of an
+ * additional static variable in position-dependent code.  The
+ * ABS_VALUE() macro abstracts away these differences, using the most
+ * efficient available technique.  Use as e.g.:
+ *
+ *    extern int ABS_SYMBOL ( _my_symbol );
+ *    #define my_symbol ABS_VALUE ( _my_symbol )
+ *
+ *    printf ( "Absolute symbol value is %x\n", my_symbol );
+ *
+ * The ABS_VALUE() macro uses the (otherwise redundant) type declared
+ * on the ABS_SYMBOL() array to automatically determine the correct
+ * type for the ABS_VALUE() expression.
+ *
+ * Unlike ABS_VALUE_INIT(), there is no restriction that the type must
+ * be at least as large as a pointer type.
+ */
+#ifndef __pie__
+#define ABS_VALUE( name ) ( ( typeof ( name[0] ) ) ( intptr_t ) name )
+#else
+#define ABS_VALUE( name ) ( {						\
+	static void * volatile static_ ## name = name;			\
+	( ( typeof ( name[0] ) ) ( intptr_t ) static_ ## name );	\
+	} )
+#endif
+
+#endif /* ASSEMBLY */
+/** @} */
 
 /**
  * @defgroup licences Licence declarations
@@ -755,6 +849,53 @@ char __debug_disable(OBJECT) = ( DBGLVL_MAX & ~DBGLVL_DFLT );
 #define FILE_LICENCE_BSD2 \
 	PROVIDE_SYMBOL ( PREFIX_OBJECT ( __licence__bsd2__ ) )
 
+/** Declare a file as being under the two-clause BSD plus patent licence
+ *
+ * This licence declaration is applicable when a file states itself to
+ * be licensed under terms allowing redistribution in source and
+ * binary forms (with or without modification) provided that:
+ *
+ *     redistributions of source code retain the copyright notice,
+ *     list of conditions and any attached disclaimers
+ *
+ *     redistributions in binary form reproduce the copyright notice,
+ *     list of conditions and any attached disclaimers in the
+ *     documentation and/or other materials provided with the
+ *     distribution
+ *
+ * and in addition states that
+ *
+ *     Subject to the terms and conditions of this license, each
+ *     copyright holder and contributor hereby grants to those
+ *     receiving rights under this license a perpetual, worldwide,
+ *     non-exclusive, no-charge, royalty-free, irrevocable (except for
+ *     failure to satisfy the conditions of this license) patent
+ *     license to make, have made, use, offer to sell, sell, import,
+ *     and otherwise transfer this software, where such license
+ *     applies only to those patent claims, already acquired or
+ *     hereafter acquired, licensable by such copyright holder or
+ *     contributor that are necessarily infringed by:
+ *
+ *       their Contribution(s) (the licensed copyrights of copyright
+ *       holders and non-copyrightable additions of contributors, in
+ *       source or binary form) alone; or
+ *
+ *       combination of their Contribution(s) with the work of
+ *       authorship to which such Contribution(s) was added by such
+ *       copyright holder or contributor, if, at the time the
+ *       Contribution is added, such addition causes such combination
+ *       to be necessarily infringed. The patent license shall not
+ *       apply to any other combinations which include the
+ *       Contribution.
+ *
+ * It is not necessary for the file to explicitly state that it is
+ * under a "BSD" licence; only that the licensing terms be
+ * functionally equivalent to the standard two-clause BSD licence with
+ * patent grant.
+ */
+#define FILE_LICENCE_BSD2_PATENT \
+	PROVIDE_SYMBOL ( PREFIX_OBJECT ( __licence__bsd2_patent__ ) )
+
 /** Declare a file as being under the one-clause MIT-style licence
  *
  * This licence declaration is applicable when a file states itself to
@@ -783,6 +924,36 @@ char __debug_disable(OBJECT) = ( DBGLVL_MAX & ~DBGLVL_DFLT );
 
 /* This file itself is under GPLv2+/UBDL */
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+
+/**
+ * @defgroup secboot UEFI Secure Boot restrictions
+ *
+ * Not all files within the iPXE codebase are allowed to be included
+ * in UEFI Secure Boot signed builds.
+ *
+ * Files that are permitted in a UEFI Secure Boot build are subject to
+ * stricter code review requirements.  In particular, contributions
+ * from third parties may not be marked as permitted unless they have
+ * passed an approved security review.
+ *
+ * @{
+ */
+
+/** Declare a file as being permitted in a UEFI Secure Boot build */
+#define FILE_SECBOOT_PERMITTED \
+	PROVIDE_SYMBOL ( PREFIX_OBJECT ( __secboot__permitted__ ) )
+
+/** Declare a file as being forbidden in a UEFI Secure Boot build */
+#define FILE_SECBOOT_FORBIDDEN \
+	PROVIDE_SYMBOL ( PREFIX_OBJECT ( __secboot__forbidden__ ) )
+
+/** Declare a file's UEFI Secure Boot permission status */
+#define FILE_SECBOOT( _status ) FILE_SECBOOT_ ## _status
+
+/** @} */
+
+/* This file itself is permitted in a Secure Boot build */
+FILE_SECBOOT ( PERMITTED );
 
 #include <bits/compiler.h>
 

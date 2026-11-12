@@ -22,10 +22,12 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <errno.h>
 #include <getopt.h>
 #include <ipxe/image.h>
@@ -46,6 +48,8 @@ struct imgsingle_options {
 	char *name;
 	/** Download timeout */
 	unsigned long timeout;
+	/** Display only error messages */
+	int quiet;
 	/** Replace image */
 	int replace;
 	/** Free image after execution */
@@ -54,18 +58,20 @@ struct imgsingle_options {
 
 /** "img{single}" option list */
 static union {
-	/* "imgexec" takes all three options */
-	struct option_descriptor imgexec[4];
-	/* Other "img{single}" commands take only --name, --timeout,
+	/* "imgexec" takes all five options */
+	struct option_descriptor imgexec[5];
+	/* Other "img{single}" commands take only --name, --timeout, --quiet,
 	 * and --autofree
 	 */
-	struct option_descriptor imgsingle[3];
+	struct option_descriptor imgsingle[4];
 } opts = {
 	.imgexec = {
 		OPTION_DESC ( "name", 'n', required_argument,
 			      struct imgsingle_options, name, parse_string ),
 		OPTION_DESC ( "timeout", 't', required_argument,
 			      struct imgsingle_options, timeout, parse_timeout),
+		OPTION_DESC ( "quiet", 'q', no_argument,
+			      struct imgsingle_options, quiet, parse_flag ),
 		OPTION_DESC ( "autofree", 'a', no_argument,
 			      struct imgsingle_options, autofree, parse_flag ),
 		OPTION_DESC ( "replace", 'r', no_argument,
@@ -78,7 +84,7 @@ struct imgsingle_descriptor {
 	/** Command descriptor */
 	struct command_descriptor *cmd;
 	/** Function to use to acquire the image */
-	int ( * acquire ) ( const char *name, unsigned long timeout,
+	int ( * acquire ) ( const char *name, unsigned long timeout, int quiet,
 			    struct image **image );
 	/** Pre-action to take upon image, or NULL */
 	void ( * preaction ) ( struct image *image );
@@ -125,11 +131,11 @@ static int imgsingle_exec ( int argc, char **argv,
 
 	/* Acquire the image */
 	if ( name_uri ) {
-		if ( ( rc = desc->acquire ( name_uri, opts.timeout,
+		if ( ( rc = desc->acquire ( name_uri, opts.timeout, opts.quiet,
 					    &image ) ) != 0 )
 			goto err_acquire;
 	} else {
-		image = image_find_selected();
+		image = find_image_tag ( &selected_image );
 		if ( ! image ) {
 			printf ( "No image selected\n" );
 			goto err_acquire;
@@ -392,54 +398,22 @@ static int imgfree_exec ( int argc, char **argv ) {
 	return imgmulti_exec ( argc, argv, unregister_image );
 }
 
-/** Image management commands */
-struct command image_commands[] __command = {
-	{
-		.name = "imgfetch",
-		.exec = imgfetch_exec,
-	},
-	{
-		.name = "module",
-		.exec = imgfetch_exec, /* synonym for "imgfetch" */
-	},
-	{
-		.name = "initrd",
-		.exec = imgfetch_exec, /* synonym for "imgfetch" */
-	},
-	{
-		.name = "kernel",
-		.exec = imgselect_exec, /* synonym for "imgselect" */
-	},
-	{
-		.name = "chain",
-		.exec = imgexec_exec, /* synonym for "imgexec" */
-	},
-	{
-		.name = "imgselect",
-		.exec = imgselect_exec,
-	},
-	{
-		.name = "imgload",
-		.exec = imgselect_exec, /* synonym for "imgselect" */
-	},
-	{
-		.name = "imgargs",
-		.exec = imgargs_exec,
-	},
-	{
-		.name = "imgexec",
-		.exec = imgexec_exec,
-	},
-	{
-		.name = "boot", /* synonym for "imgexec" */
-		.exec = imgexec_exec,
-	},
-	{
-		.name = "imgstat",
-		.exec = imgstat_exec,
-	},
-	{
-		.name = "imgfree",
-		.exec = imgfree_exec,
-	},
-};
+/* "imgfetch" and synonyms */
+COMMAND ( imgfetch, imgfetch_exec );
+COMMAND ( module, imgfetch_exec );
+COMMAND ( initrd, imgfetch_exec );
+
+/* "imgselect" and synonyms */
+COMMAND ( imgselect, imgselect_exec );
+COMMAND ( imgload, imgselect_exec );
+COMMAND ( kernel, imgselect_exec );
+
+/* "imgexec" and synonyms */
+COMMAND ( imgexec, imgexec_exec );
+COMMAND ( chain, imgexec_exec );
+COMMAND ( boot, imgexec_exec );
+
+/* Other image management commands */
+COMMAND ( imgargs, imgargs_exec );
+COMMAND ( imgstat, imgstat_exec );
+COMMAND ( imgfree, imgfree_exec );

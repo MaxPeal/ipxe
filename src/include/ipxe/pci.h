@@ -8,10 +8,12 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdint.h>
 #include <ipxe/device.h>
 #include <ipxe/tables.h>
+#include <ipxe/dma.h>
 #include <ipxe/pci_io.h>
 
 /** PCI vendor ID */
@@ -94,10 +96,14 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define PCI_CAP_ID_VPD			0x03	/**< Vital product data */
 #define PCI_CAP_ID_VNDR			0x09	/**< Vendor-specific */
 #define PCI_CAP_ID_EXP			0x10	/**< PCI Express */
+#define PCI_CAP_ID_MSIX			0x11	/**< MSI-X */
 #define PCI_CAP_ID_EA			0x14	/**< Enhanced Allocation */
 
 /** Next capability */
 #define PCI_CAP_NEXT		0x01
+
+/** Capability length */
+#define PCI_CAP_LEN		0x02
 
 /** Power management control and status */
 #define PCI_PM_CTRL		0x04
@@ -109,11 +115,25 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define PCI_EXP_DEVCTL		0x08
 #define PCI_EXP_DEVCTL_FLR		0x8000	/**< Function level reset */
 
+/** MSI-X interrupts */
+#define PCI_MSIX_CTRL		0x02
+#define PCI_MSIX_CTRL_ENABLE		0x8000	/**< Enable MSI-X */
+#define PCI_MSIX_CTRL_MASK		0x4000	/**< Mask all interrupts */
+#define PCI_MSIX_CTRL_SIZE(x)	( (x) & 0x07ff ) /**< Table size */
+#define PCI_MSIX_DESC_TABLE	0x04
+#define PCI_MSIX_DESC_PBA	0x08
+#define PCI_MSIX_DESC_BIR(x)	( (x) & 0x00000007 ) /**< BAR index */
+#define PCI_MSIX_DESC_OFFSET(x)	( (x) & 0xfffffff8 ) /**< BAR offset */
+
 /** Uncorrectable error status */
 #define PCI_ERR_UNCOR_STATUS	0x04
 
 /** Network controller */
 #define PCI_CLASS_NETWORK	0x02
+
+/** Bridge device */
+#define PCI_CLASS_BRIDGE	0x06
+#define PCI_CLASS_BRIDGE_PCI		0x04	/**< PCI-to-PCI bridge */
 
 /** Serial bus controller */
 #define PCI_CLASS_SERIAL	0x0c
@@ -122,6 +142,24 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #define PCI_CLASS_SERIAL_USB_OHCI	 0x10	/**< OHCI USB controller */
 #define PCI_CLASS_SERIAL_USB_EHCI	 0x20	/**< ECHI USB controller */
 #define PCI_CLASS_SERIAL_USB_XHCI	 0x30	/**< xHCI USB controller */
+
+/** Primary bus number */
+#define PCI_PRIMARY		0x18
+
+/** Secondary bus number */
+#define PCI_SECONDARY		0x19
+
+/** Subordinate bus number */
+#define PCI_SUBORDINATE		0x1a
+
+/** Memory base and limit */
+#define PCI_MEM_BASE		0x20
+#define PCI_MEM_LIMIT		0x22
+#define PCI_MEM_MASK			0x000fUL
+#define PCI_PREFMEM_BASE	0x24
+#define PCI_PREFMEM_LIMIT	0x26
+#define PCI_PREFMEM_BASE_HI	0x28
+#define PCI_PREFMEM_LIMIT_HI	0x2c
 
 /** Construct PCI class
  *
@@ -176,6 +214,8 @@ struct pci_class_id {
 struct pci_device {
 	/** Generic device */
 	struct device dev;
+	/** DMA device */
+	struct dma_device dma;
 	/** Memory base
 	 *
 	 * This is the physical address of the first valid memory BAR.
@@ -195,6 +235,8 @@ struct pci_device {
 	uint32_t class;
 	/** Interrupt number */
 	uint8_t irq;
+	/** Header type */
+	uint8_t hdrtype;
 	/** Segment, bus, device, and function (bus:dev.fn) number */
 	uint32_t busdevfn;
 	/** Driver for this device */
@@ -245,9 +287,6 @@ struct pci_driver {
 #define PCI_BUS( busdevfn )		( ( (busdevfn) >> 8 ) & 0xff )
 #define PCI_SLOT( busdevfn )		( ( (busdevfn) >> 3 ) & 0x1f )
 #define PCI_FUNC( busdevfn )		( ( (busdevfn) >> 0 ) & 0x07 )
-#define PCI_BUSDEVFN( segment, bus, slot, func )			\
-	( ( (segment) << 16 ) | ( (bus) << 8 ) |			\
-	  ( (slot) << 3 ) | ( (func) << 0 ) )
 #define PCI_FIRST_FUNC( busdevfn )	( (busdevfn) & ~0x07 )
 #define PCI_LAST_FUNC( busdevfn )	( (busdevfn) | 0x07 )
 
@@ -281,17 +320,21 @@ struct pci_driver {
 	PCI_SLOT ( (pci)->busdevfn ), PCI_FUNC ( (pci)->busdevfn )
 
 extern void adjust_pci_device ( struct pci_device *pci );
+extern int pci_bar_is_io ( struct pci_device *pci, unsigned int reg );
 extern unsigned long pci_bar_start ( struct pci_device *pci,
 				     unsigned int reg );
+extern void pci_bar_set ( struct pci_device *pci, unsigned int reg,
+			  unsigned long start );
+extern unsigned long pci_bar_size ( struct pci_device *pci, unsigned int reg );
 extern int pci_read_config ( struct pci_device *pci );
-extern int pci_find_next ( struct pci_device *pci, unsigned int busdevfn );
+extern int pci_find_next ( struct pci_device *pci, uint32_t *busdevfn );
 extern int pci_find_driver ( struct pci_device *pci );
 extern int pci_probe ( struct pci_device *pci );
 extern void pci_remove ( struct pci_device *pci );
 extern int pci_find_capability ( struct pci_device *pci, int capability );
 extern int pci_find_next_capability ( struct pci_device *pci,
 				      int pos, int capability );
-extern unsigned long pci_bar_size ( struct pci_device *pci, unsigned int reg );
+extern void pci_reset ( struct pci_device *pci, unsigned int exp );
 
 /**
  * Initialise PCI device

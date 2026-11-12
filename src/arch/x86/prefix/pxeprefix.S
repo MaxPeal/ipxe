@@ -1,6 +1,7 @@
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 
 #define PXENV_UNDI_SHUTDOWN		0x0005
+#define PXENV_UNDI_GET_INFORMATION	0x000c
 #define	PXENV_UNDI_GET_NIC_TYPE		0x0012
 #define PXENV_UNDI_GET_IFACE_INFO	0x0013
 #define	PXENV_STOP_UNDI			0x0015
@@ -11,10 +12,10 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 
 #define PXE_HACK_EB54			0x0001
 
-	.text
+	.section ".note.GNU-stack"
+	.code16
 	.arch i386
 	.org 0
-	.code16
 
 #include <librm.h>
 #include <undi.h>
@@ -22,6 +23,16 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 #define STACK_MAGIC ( 'L' + ( 'R' << 8 ) + ( 'E' << 16 ) + ( 'T' << 24 ) )
 #define EB_MAGIC_1 ( 'E' + ( 't' << 8 ) + ( 'h' << 16 ) + ( 'e' << 24 ) )
 #define EB_MAGIC_2 ( 'r' + ( 'b' << 8 ) + ( 'o' << 16 ) + ( 'o' << 24 ) )
+
+/* Magic signature word */
+#define IPXE_NBP_MAGIC 0x18ae
+
+/* Architecture byte */
+#ifdef __x86_64__
+#define IPXE_NBP_ARCH 0x64
+#else
+#define IPXE_NBP_ARCH 0x32
+#endif
 
 /* Prefix memory layout:
  *
@@ -43,7 +54,21 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL )
 	.section ".prefix", "ax", @progbits
 	.globl	_pxe_start
 _pxe_start:
+	/* iPXE NBP magic header:
+	 *
+	 * Offset	Content
+	 * ------	-------
+	 * 0		ljmp instruction (0xea)
+	 * 1-2		ljmp offset (and therefore length of header)
+	 * 3-4		ljmp segment (0x07c0)
+	 * 5+		Metadata fields
+	 * \_ 5		CPU architecture (0x32=i386, 0x64=x86_64)
+	 * \_ 6-7	Magic value (0x18ae)
+	 *
+	 */
 	jmp	$0x7c0, $1f
+	.byte	IPXE_NBP_ARCH
+	.word	IPXE_NBP_MAGIC
 1:
 	/* Preserve registers for possible return to PXE */
 	pushfl
@@ -325,18 +350,37 @@ print_structure_information:
  *****************************************************************************
  */
 get_physical_device:
+	/* Allow for devices that fail to set the physical device type */
+	movb	$0xeb, %al
+	movb	%al, ( pxe_parameter_structure + 0x02 )
 	/* Issue PXENV_UNDI_GET_NIC_TYPE */
 	movw	$PXENV_UNDI_GET_NIC_TYPE, %bx
 	call	pxe_call
 	jnc	1f
 	call	print_pxe_error
+	movw	$10f, %si
+	call	print_message
 	jmp	no_physical_device
 1:	/* Determine physical device type */
+	movw	$10f, %si
+	call	print_message
 	movb	( pxe_parameter_structure + 0x02 ), %al
 	cmpb	$2, %al
 	je	pci_physical_device
+	cmpb	$0xeb, %al
+	je	probably_pci_physical_device
 	jmp	no_physical_device
+	.section ".prefix.data", "aw", @progbits
+10:	.asciz	"         UNDI device is "
+	.previous
 
+probably_pci_physical_device:
+	/* Device did not write the type byte: assume PCI */
+	movw	$10f, %si
+	call	print_message
+	.section ".prefix.data", "aw", @progbits
+10:	.asciz	"probably "
+	.previous
 pci_physical_device:
 	/* Record PCI bus:dev.fn and vendor/device IDs */
 	movl	( pxe_parameter_structure + 0x03 ), %eax
@@ -346,9 +390,17 @@ pci_physical_device:
 	movw	$10f, %si
 	call	print_message
 	call	print_pci_busdevfn
+	movb	$( ' ' ), %al
+	call	print_character
+	movw	pci_vendor, %ax
+	call	print_hex_word
+	movb	$( ':' ), %al
+	call	print_character
+	movw	pci_device, %ax
+	call	print_hex_word
 	jmp	99f
 	.section ".prefix.data", "aw", @progbits
-10:	.asciz	"         UNDI device is PCI "
+10:	.asciz	"PCI "
 	.previous
 
 no_physical_device:
@@ -356,9 +408,36 @@ no_physical_device:
 	movw	$10f, %si
 	call	print_message
 	.section ".prefix.data", "aw", @progbits
-10:	.asciz	"         Unable to determine UNDI physical device"
+10:	.asciz	"unknown"
 	.previous
 
+99:
+
+/*****************************************************************************
+ * Get IRQ number
+ *****************************************************************************
+ */
+get_irq:
+	/* Issue PXENV_UNDI_GET_INFORMATION */
+	movw	$PXENV_UNDI_GET_INFORMATION, %bx
+	call	pxe_call
+	jnc	1f
+	call	print_pxe_error
+	jmp	99f
+1:	/* Check for a valid IRQ number */
+	movw	( pxe_parameter_structure + 0x04 ), %ax
+	testw	%ax, %ax
+	jz	99f
+	cmpw	$15, %ax
+	ja	99f
+	/* Store IRQ number */
+	movw	%ax, undi_irq
+	movw	$10f, %si
+	call	print_message
+	call	print_word
+	.section ".prefix.data", "aw", @progbits
+10:	.asciz	", IRQ "
+	.previous
 99:
 
 /*****************************************************************************
@@ -450,6 +529,30 @@ get_cmdline:
 pxe_cmdline:
 	.long	0
 	.previous
+
+/*****************************************************************************
+ * Ensure NIC interrupt is disabled
+ *****************************************************************************
+ */
+disable_irq:
+	/* Check for a recorded IRQ number */
+	movw	undi_irq, %cx
+	testw	%cx, %cx
+	jz	99f
+	/* Calculate IMR */
+	movw	%cx, %dx
+	shlw	$4, %dx
+	andb	$0x80, %dl
+	orb	$0x21, %dl
+	/* Calculate mask value */
+	movb	$0x01, %bl
+	andb	$0x07, %cl
+	shlb	%cl, %bl
+	/* Mask interrupt */
+	inb	%dx, %al
+	orb	%bl, %al
+	outb	%al, %dx
+99:
 
 /*****************************************************************************
  * Leave NIC in a safe state
@@ -739,6 +842,8 @@ undi_code_segment:	.word 0
 undi_data_segoff:
 undi_data_size:		.word 0
 undi_data_segment:	.word 0
+
+undi_irq:		.word 0
 
 pxe_hacks:		.word 0
 

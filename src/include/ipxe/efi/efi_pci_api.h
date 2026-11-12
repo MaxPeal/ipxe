@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #ifdef PCIAPI_EFI
 #define PCIAPI_PREFIX_efi
@@ -31,17 +32,6 @@ extern int efipci_read ( struct pci_device *pci, unsigned long location,
 			 void *value );
 extern int efipci_write ( struct pci_device *pci, unsigned long location,
 			  unsigned long value );
-
-/**
- * Determine number of PCI buses within system
- *
- * @ret num_bus		Number of buses
- */
-static inline __always_inline int
-PCIAPI_INLINE ( efi, pci_num_bus ) ( void ) {
-	/* EFI does not want us to scan the PCI bus ourselves */
-	return 0;
-}
 
 /**
  * Read byte from PCI configuration space via EFI

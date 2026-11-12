@@ -34,6 +34,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /**
  * @file
@@ -47,93 +48,97 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 #include <ipxe/hmac.h>
 
 /**
- * Reduce HMAC key length
+ * Construct HMAC reduced key
  *
  * @v digest		Digest algorithm to use
- * @v digest_ctx	Digest context
- * @v key		Key
- * @v key_len		Length of key
+ * @v ctx		HMAC context
+ * @v secret		Secret key
+ * @v len		Length of secret key
+ * @v key		HMAC reduced key to fill in
  */
-static void hmac_reduce_key ( struct digest_algorithm *digest,
-			      void *key, size_t *key_len ) {
-	uint8_t digest_ctx[digest->ctxsize];
+void hmac_key ( struct digest_algorithm *digest, void *ctx, const void *secret,
+		size_t len, void *key ) {
+	hmac_context_t ( digest ) *hctx = ctx;
+	hmac_key_t ( digest ) *hkey = key;
 
-	digest_init ( digest, digest_ctx );
-	digest_update ( digest, digest_ctx, key, *key_len );
-	digest_final ( digest, digest_ctx, key );
-	*key_len = digest->digestsize;
+	/* Reduce key (if applicable) and zero-pad to block size */
+	memset ( hkey->pad, 0, sizeof ( hkey->pad ) );
+	if ( len <= sizeof ( hkey->pad ) ) {
+		memcpy ( hkey->pad, secret, len );
+	} else {
+		digest_init ( digest, hctx->ctx );
+		digest_update ( digest, hctx->ctx, secret, len );
+		digest_final ( digest, hctx->ctx, hkey->pad );
+	}
+}
+
+/**
+ * Initialise HMAC from reduced key
+ *
+ * @v digest		Digest algorithm
+ * @v ctx		HMAC context
+ * @v hkey		HMAC key
+ */
+void hmac_init_key ( struct digest_algorithm *digest, void *ctx,
+		     const void *key ) {
+	hmac_context_t ( digest ) *hctx = ctx;
+	const hmac_key_t ( digest ) *hkey = key;
+	unsigned int i;
+
+	/* Construct input pad */
+	for ( i = 0 ; i < sizeof ( hkey->pad ) ; i++ ) {
+		hctx->pad[i] = ( hkey->pad[i] ^ 0x36 );
+	}
+
+	/* Start inner hash */
+	digest_init ( digest, hctx->ctx );
+	digest_update ( digest, hctx->ctx, hctx->pad, sizeof ( hctx->pad ) );
 }
 
 /**
  * Initialise HMAC
  *
  * @v digest		Digest algorithm to use
- * @v digest_ctx	Digest context
- * @v key		Key
- * @v key_len		Length of key
- *
- * The length of the key should be less than the block size of the
- * digest algorithm being used.  (If the key length is greater, it
- * will be replaced with its own digest, and key_len will be updated
- * accordingly).
+ * @v ctx		HMAC context
+ * @v secret		Secret key
+ * @v len		Length of secret key
  */
-void hmac_init ( struct digest_algorithm *digest, void *digest_ctx,
-		 void *key, size_t *key_len ) {
-	unsigned char k_ipad[digest->blocksize];
-	unsigned int i;
+void hmac_init ( struct digest_algorithm *digest, void *ctx,
+		 const void *secret, size_t len ) {
+	hmac_context_t ( digest ) *hctx = ctx;
 
-	/* Reduce key if necessary */
-	if ( *key_len > sizeof ( k_ipad ) )
-		hmac_reduce_key ( digest, key, key_len );
+	/* Construct reduced key (in input pad) */
+	hmac_key ( digest, hctx->ctx, secret, len, hctx->pad );
 
-	/* Construct input pad */
-	memset ( k_ipad, 0, sizeof ( k_ipad ) );
-	memcpy ( k_ipad, key, *key_len );
-	for ( i = 0 ; i < sizeof ( k_ipad ) ; i++ ) {
-		k_ipad[i] ^= 0x36;
-	}
-	
-	/* Start inner hash */
-	digest_init ( digest, digest_ctx );
-	digest_update ( digest, digest_ctx, k_ipad, sizeof ( k_ipad ) );
+	/* Initialise HMAC */
+	hmac_init_key ( digest, hctx->ctx, hctx->pad );
 }
 
 /**
  * Finalise HMAC
  *
  * @v digest		Digest algorithm to use
- * @v digest_ctx	Digest context
- * @v key		Key
- * @v key_len		Length of key
+ * @v ctx		HMAC context
  * @v hmac		HMAC digest to fill in
- *
- * The length of the key should be less than the block size of the
- * digest algorithm being used.  (If the key length is greater, it
- * will be replaced with its own digest, and key_len will be updated
- * accordingly).
  */
-void hmac_final ( struct digest_algorithm *digest, void *digest_ctx,
-		  void *key, size_t *key_len, void *hmac ) {
-	unsigned char k_opad[digest->blocksize];
+void hmac_final ( struct digest_algorithm *digest, void *ctx, void *hmac ) {
+	hmac_context_t ( digest ) *hctx = ctx;
 	unsigned int i;
 
-	/* Reduce key if necessary */
-	if ( *key_len > sizeof ( k_opad ) )
-		hmac_reduce_key ( digest, key, key_len );
-
-	/* Construct output pad */
-	memset ( k_opad, 0, sizeof ( k_opad ) );
-	memcpy ( k_opad, key, *key_len );
-	for ( i = 0 ; i < sizeof ( k_opad ) ; i++ ) {
-		k_opad[i] ^= 0x5c;
+	/* Construct output pad from input pad */
+	for ( i = 0 ; i < sizeof ( hctx->pad ) ; i++ ) {
+		hctx->pad[i] ^= 0x6a;
 	}
-	
+
 	/* Finish inner hash */
-	digest_final ( digest, digest_ctx, hmac );
+	digest_final ( digest, hctx->ctx, hmac );
 
 	/* Perform outer hash */
-	digest_init ( digest, digest_ctx );
-	digest_update ( digest, digest_ctx, k_opad, sizeof ( k_opad ) );
-	digest_update ( digest, digest_ctx, hmac, digest->digestsize );
-	digest_final ( digest, digest_ctx, hmac );
+	digest_init ( digest, hctx->ctx );
+	digest_update ( digest, hctx->ctx, hctx->pad, sizeof ( hctx->pad ) );
+	digest_update ( digest, hctx->ctx, hmac, digest->digestsize );
+	digest_final ( digest, hctx->ctx, hmac );
+
+	/* Erase output pad (from which the key may be derivable) */
+	memset ( hctx->pad, 0, sizeof ( hctx->pad ) );
 }

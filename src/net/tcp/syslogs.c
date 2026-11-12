@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 /** @file
  *
@@ -31,6 +32,8 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <errno.h>
 #include <byteswap.h>
 #include <ipxe/xfer.h>
 #include <ipxe/open.h>
@@ -52,9 +55,7 @@ FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
 struct console_driver syslogs_console __console_driver;
 
 /** The encrypted syslog server */
-static struct sockaddr_tcpip logserver = {
-	.st_port = htons ( SYSLOG_PORT ),
-};
+static struct sockaddr_tcpip logserver;
 
 /**
  * Handle encrypted syslog TLS interface close
@@ -62,9 +63,10 @@ static struct sockaddr_tcpip logserver = {
  * @v intf		Interface
  * @v rc		Reason for close
  */
-static void syslogs_close ( struct interface *intf __unused, int rc ) {
+static void syslogs_close ( struct interface *intf, int rc ) {
 
 	DBG ( "SYSLOGS console disconnected: %s\n", strerror ( rc ) );
+	intf_restart ( intf, rc );
 }
 
 /**
@@ -208,7 +210,9 @@ const struct setting syslogs_setting __setting ( SETTING_MISC, syslogs ) = {
 static int apply_syslogs_settings ( void ) {
 	static char *old_server;
 	char *server;
-	struct interface *socket;
+	char *sep;
+	char *end;
+	unsigned int port;
 	int rc;
 
 	/* Fetch log server */
@@ -235,32 +239,49 @@ static int apply_syslogs_settings ( void ) {
 		goto out_no_server;
 	}
 
-	/* Add TLS filter */
-	if ( ( rc = add_tls ( &syslogs, server, &socket ) ) != 0 ) {
-		DBG ( "SYSLOGS cannot create TLS filter: %s\n",
-		      strerror ( rc ) );
-		goto err_add_tls;
+	/* Identify port */
+	port = SYSLOG_PORT;
+	if ( ( sep = strrchr ( server, ':' ) ) &&
+	     ( server[ strlen ( server ) - 1 ] != ']' ) ) {
+		*(sep++) = '\0';
+		port = strtoul ( sep, &end, 0 );
+		if ( *end || ( ! *sep ) ) {
+			DBG ( "SYSLOGS log server %s:%s has invalid port\n",
+			      server, sep );
+			rc = -EINVAL;
+			goto err_port;
+		}
 	}
+	logserver.st_port = htons ( port );
+	DBG ( "SYSLOGS using log server %s:%d\n", server, port );
 
 	/* Connect to log server */
-	if ( ( rc = xfer_open_named_socket ( socket, SOCK_STREAM,
+	if ( ( rc = xfer_open_named_socket ( &syslogs, SOCK_STREAM,
 					     (( struct sockaddr *) &logserver ),
 					     server, NULL ) ) != 0 ) {
 		DBG ( "SYSLOGS cannot connect to log server: %s\n",
 		      strerror ( rc ) );
 		goto err_open_named_socket;
 	}
-	DBG ( "SYSLOGS using log server %s\n", server );
+
+	/* Add TLS filter */
+	if ( ( rc = add_tls ( &syslogs, server, NULL, NULL ) ) != 0 ) {
+		DBG ( "SYSLOGS cannot create TLS filter: %s\n",
+		      strerror ( rc ) );
+		goto err_add_tls;
+	}
 
 	/* Record log server */
 	old_server = server;
-	server = NULL;
+	if ( sep )
+		*(--sep) = ':';
 
-	/* Success */
-	rc = 0;
+	return 0;
 
- err_open_named_socket:
  err_add_tls:
+ err_open_named_socket:
+	syslogs_close ( &syslogs, rc );
+ err_port:
  out_no_server:
  out_no_change:
 	free ( server );

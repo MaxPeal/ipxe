@@ -1,5 +1,5 @@
 #ifndef _IPXE_XENVER_H
-#define _IPXE_VENVER_H
+#define _IPXE_XENVER_H
 
 /** @file
  *
@@ -8,6 +8,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <ipxe/xen.h>
 #include <xen/version.h>

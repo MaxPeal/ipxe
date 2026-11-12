@@ -22,13 +22,16 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include <errno.h>
 #include <ipxe/uri.h>
 #include <ipxe/xferbuf.h>
 #include <ipxe/job.h>
+#include <ipxe/peerdist.h>
 #include <ipxe/peerblk.h>
 #include <ipxe/peermux.h>
 
@@ -85,15 +88,10 @@ static void peermux_close ( struct peerdist_multiplexer *peermux, int rc ) {
  */
 static int peermux_progress ( struct peerdist_multiplexer *peermux,
 			      struct job_progress *progress ) {
-	struct peerdist_statistics *stats = &peermux->stats;
-	unsigned int percentage;
 
-	/* Construct PeerDist status message */
-	if ( stats->total ) {
-		percentage = ( ( 100 * stats->local ) / stats->total );
-		snprintf ( progress->message, sizeof ( progress->message ),
-			   "%3d%% from %d peers", percentage, stats->peers );
-	}
+	/* Report segment count as progress */
+	progress->total = peermux->cache.info.segments;
+	progress->completed = peermux->cache.segment.index;
 
 	return 0;
 }
@@ -129,6 +127,7 @@ static int peermux_info_deliver ( struct peerdist_multiplexer *peermux,
  * @v rc		Reason for close
  */
 static void peermux_info_close ( struct peerdist_multiplexer *peermux, int rc ){
+	struct xfer_buffer *buffer = &peermux->buffer;
 	struct peerdist_info *info = &peermux->cache.info;
 	size_t len;
 
@@ -145,8 +144,7 @@ static void peermux_info_close ( struct peerdist_multiplexer *peermux, int rc ){
 	intf_shutdown ( &peermux->info, rc );
 
 	/* Parse content information */
-	if ( ( rc = peerdist_info ( info->raw.data, peermux->buffer.len,
-				    info ) ) != 0 ) {
+	if ( ( rc = peerdist_info ( buffer->data, buffer->len, info ) ) != 0 ) {
 		DBGC ( peermux, "PEERMUX %p could not parse content info: %s\n",
 		       peermux, strerror ( rc ) );
 		goto err;
@@ -299,35 +297,6 @@ peermux_block_buffer ( struct peerdist_multiplexed_block *peermblk ) {
 }
 
 /**
- * Record peer discovery statistics
- *
- * @v peermblk		PeerDist multiplexed block download
- * @v peer		Selected peer (or NULL)
- * @v peers		List of available peers
- */
-static void peermux_block_stat ( struct peerdist_multiplexed_block *peermblk,
-				 struct peerdisc_peer *peer,
-				 struct list_head *peers ) {
-	struct peerdist_multiplexer *peermux = peermblk->peermux;
-	struct peerdist_statistics *stats = &peermux->stats;
-	struct peerdisc_peer *tmp;
-	unsigned int count = 0;
-
-	/* Record maximum number of available peers */
-	list_for_each_entry ( tmp, peers, list )
-		count++;
-	if ( count > stats->peers )
-		stats->peers = count;
-
-	/* Update block counts */
-	if ( peer )
-		stats->local++;
-	stats->total++;
-	DBGC2 ( peermux, "PEERMUX %p downloaded %d/%d from %d peers\n",
-		peermux, stats->local, stats->total, stats->peers );
-}
-
-/**
  * Close multiplexed block download
  *
  * @v peermblk		PeerDist multiplexed block download
@@ -385,8 +354,6 @@ static struct interface_operation peermux_block_operations[] = {
 		  peermux_block_deliver ),
 	INTF_OP ( xfer_buffer, struct peerdist_multiplexed_block *,
 		  peermux_block_buffer ),
-	INTF_OP ( peerdisc_stat, struct peerdist_multiplexed_block *,
-		  peermux_block_stat ),
 	INTF_OP ( intf_close, struct peerdist_multiplexed_block *,
 		  peermux_block_close ),
 };
@@ -414,6 +381,9 @@ int peermux_filter ( struct interface *xfer, struct interface *info,
 	struct peerdist_multiplexed_block *peermblk;
 	unsigned int i;
 
+	/* Update statistics */
+	peerstats.downloads++;
+
 	/* Allocate and initialise structure */
 	peermux = zalloc ( sizeof ( *peermux ) );
 	if ( ! peermux )
@@ -422,8 +392,7 @@ int peermux_filter ( struct interface *xfer, struct interface *info,
 	intf_init ( &peermux->xfer, &peermux_xfer_desc, &peermux->refcnt );
 	intf_init ( &peermux->info, &peermux_info_desc, &peermux->refcnt );
 	peermux->uri = uri_get ( uri );
-	xferbuf_umalloc_init ( &peermux->buffer,
-			       &peermux->cache.info.raw.data );
+	xferbuf_umalloc_init ( &peermux->buffer );
 	process_init_stopped ( &peermux->process, &peermux_process_desc,
 			       &peermux->refcnt );
 	INIT_LIST_HEAD ( &peermux->busy );

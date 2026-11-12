@@ -22,6 +22,7 @@
  */
 
 FILE_LICENCE ( GPL2_OR_LATER_OR_UBDL );
+FILE_SECBOOT ( PERMITTED );
 
 #include <string.h>
 #include <unistd.h>
@@ -297,7 +298,7 @@ static int intelxvf_open ( struct net_device *netdev ) {
 		     INTELXVF_SRRCTL_DESCTYPE_MASK );
 	srrctl |= ( INTELXVF_SRRCTL_BSIZE_DEFAULT |
 		    INTELXVF_SRRCTL_BHDRSIZE_DEFAULT |
-		    INTELXVF_SRRCTL_DESCTYPE_DEFAULT |
+		    INTELXVF_SRRCTL_DESCTYPE_ADV1 |
 		    INTELXVF_SRRCTL_DROP_EN );
 	writel ( srrctl, intel->regs + INTELXVF_SRRCTL );
 
@@ -361,16 +362,12 @@ static void intelxvf_poll ( struct net_device *netdev ) {
 
 	/* Check for and acknowledge interrupts */
 	eicr = readl ( intel->regs + INTELXVF_EICR );
-	if ( ! eicr )
-		return;
 
-	/* Poll for TX completions, if applicable */
-	if ( eicr & INTELXVF_EIRQ_TX0 )
-		intel_poll_tx ( netdev );
+	/* Poll for TX completions */
+	intel_poll_tx ( netdev );
 
-	/* Poll for RX completions, if applicable */
-	if ( eicr & INTELXVF_EIRQ_RX0 )
-		intel_poll_rx ( netdev );
+	/* Poll for RX completions */
+	intel_poll_rx ( netdev );
 
 	/* Poll for mailbox messages, if applicable */
 	if ( eicr & INTELXVF_EIRQ_MBOX ) {
@@ -448,19 +445,24 @@ static int intelxvf_probe ( struct pci_device *pci ) {
 	memset ( intel, 0, sizeof ( *intel ) );
 	intel_init_mbox ( &intel->mbox, INTELXVF_MBCTRL, INTELXVF_MBMEM );
 	intel_init_ring ( &intel->tx, INTEL_NUM_TX_DESC, INTELXVF_TD(0),
-			  intel_describe_tx_adv );
+			  intel_describe_tx_adv, intel_status_tx );
 	intel_init_ring ( &intel->rx, INTEL_NUM_RX_DESC, INTELXVF_RD(0),
-			  intel_describe_rx );
+			  intel_describe_rx, intel_status_rx_adv );
 
 	/* Fix up PCI device */
 	adjust_pci_device ( pci );
 
 	/* Map registers */
-	intel->regs = ioremap ( pci->membase, INTELVF_BAR_SIZE );
+	intel->regs = pci_ioremap ( pci, pci->membase, INTELVF_BAR_SIZE );
 	if ( ! intel->regs ) {
 		rc = -ENODEV;
 		goto err_ioremap;
 	}
+
+	/* Configure DMA */
+	intel->dma = &pci->dma;
+	dma_set_mask_64bit ( intel->dma );
+	netdev->dma = intel->dma;
 
 	/* Reset the function */
 	intelxvf_reset ( intel );
@@ -525,6 +527,7 @@ static struct pci_device_id intelxvf_nics[] = {
 	PCI_ROM ( 0x8086, 0x1515, "x540-vf", "X540 VF", 0 ),
 	PCI_ROM ( 0x8086, 0x1565, "x550-vf", "X550 VF", 0 ),
 	PCI_ROM ( 0x8086, 0x15a8, "x552-vf", "X552 VF", 0 ),
+	PCI_ROM ( 0x8086, 0x15c5, "x557-vf", "X557-AT2 VF", 0 ),
 };
 
 /** PCI driver */
